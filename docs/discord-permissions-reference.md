@@ -31,13 +31,14 @@ Discord permissions are split across six distinct configuration surfaces. The sa
 | `Send Messages` | `1 << 11` | yes (existing) | Channel posts (sidecar `post-message`, reminders) |
 | `Embed Links` | `1 << 14` | yes (existing) | Ephemeral embed responses; reminder formatting |
 | `Attach Files` | `1 << 15` | yes (existing) | Sidecar `post-image` |
+| **`Manage Roles`** | **`1 << 28`** | **yes (new)** | Day-role sync — toggle membership on `Attack Day N` roles when siege-web pushes assignment changes (Epic 2.6) |
 | **`Create Events`** | **`1 << 44`** | **yes (new)** | Autonomous tank-week creation; admin manual create; cancel of bot-created events |
 | `Manage Events` | `1 << 33` | **no (deliberate)** | Only required to edit/cancel events created by **human admins** in the Discord UI. v1.0 doesn't need this. See § Permissive variant |
 | `Read Message History` | `1 << 16` | no | mom-bot doesn't read history; slash commands deliver structured payloads |
 | `Mention Everyone` | `1 << 17` | maybe | Only if reminders use `@here` / `@everyone`. The plan uses **role mentions**, which require the role itself to be mentionable in role settings, not this bit |
 | `Use Application Commands` | `1 << 31` | **N/A — wrong layer** | Member permission controlling who can invoke commands. Not a bot grant |
 
-**Combined integer for v1.0 (conservative):** `Send Messages | Embed Links | Attach Files | Create Events` = `2048 + 16384 + 32768 + 17592186044416` = `17592186095616`.
+**Combined integer for v1.0 (conservative):** `Send Messages | Embed Links | Attach Files | Manage Roles | Create Events` = `2048 + 16384 + 32768 + 268435456 + 17592186044416` = `17592454531072`.
 
 > **Recommendation:** don't hand-encode this. Use Developer Portal → OAuth2 → URL Generator and tick the boxes; it computes the integer for you and produces the install URL atomically.
 
@@ -66,6 +67,18 @@ After install/re-invite, the bot's role inherits the layer-2 bitfield. Verify in
 - [ ] Bot's role rank is above any role it might `@`-mention (matters for role mentions in reminders)
 
 Admins can strip permissions at this layer at any time — the bot has no way to know until an API call returns 403. If reminders or events stop working post-deploy, layer 4 is the first thing to check.
+
+### Role-ordering caveat (`Manage Roles` only)
+
+Discord enforces a hard rule on `Manage Roles`: a bot can only assign or remove roles that are **strictly lower in the role list than its own highest role**. This is layer-4 configuration — the install bitfield (layer 2) grants the *capability*, but layer 4's role-ordering decides which *specific* roles the bot can actually touch.
+
+**For the day-role sync feature (Epic 2.6) this means:**
+
+- mom-bot's role must be positioned **above** every `Attack Day N` role in the guild's Role list (Server Settings → Roles, drag-to-reorder)
+- Any human-managed role above mom-bot (e.g. `Clan Deputies`, `Admin`) is naturally outside mom-bot's reach — that's a feature, not a bug
+- If a day-role is accidentally moved above mom-bot's role, every role-toggle call for that day returns 403 silently — the only signal is in App Insights / failed-call telemetry
+
+**Audit checkpoint:** during Pre-Epic-0 (issue #1) and any time roles are reordered, verify the bot's role rank.
 
 ## Layer 5 — Channel permission overwrites
 
@@ -102,7 +115,7 @@ For each **destination channel** mom-bot posts to:
 1. Developer Portal → mom-bot app → **Installation** (left sidebar)
 2. Under **Default Install Settings → Guild Install**:
    - **Scopes:** tick `bot` and `applications.commands`
-   - **Permissions:** open the picker and tick the layer-2 permissions from this doc — `Send Messages`, `Embed Links`, `Attach Files`, `Create Events`
+   - **Permissions:** open the picker and tick the layer-2 permissions from this doc — `Send Messages`, `Embed Links`, `Attach Files`, `Manage Roles`, `Create Events`
 3. Click **Save Changes**. Discord computes the bitfield and stores it on the application
 4. The page now exposes a permanent **Install Link** at the top — copy it into the "Pinned install configuration" section below
 5. (Optional) Under **Authorization Methods**, leave only **Discord Provided Link** enabled to disable ad-hoc installs entirely
@@ -128,8 +141,8 @@ The Installation tab is Discord's source of truth; this doc is the project's sou
 
 - **Application ID:** `<TBD-pre-epic-0>`
 - **OAuth2 scopes:** `bot applications.commands`
-- **Permissions integer:** `17592186095616` (conservative — see Layer 2)
-- **Install URL:** `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=17592186095616`
+- **Permissions integer:** `17592454531072` (conservative — see Layer 2)
+- **Install URL:** `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=17592454531072`
 - **Privileged gateway intents enabled in portal:** `GUILD_MEMBERS`
 - **Code-side intents flag:** `GUILDS | GUILD_MEMBERS | GUILD_SCHEDULED_EVENTS`
 
@@ -140,7 +153,7 @@ The conservative profile excludes `Manage Events`. Adopt the permissive variant 
 - Human admins routinely create tank-week events in the Discord UI, and want mom-bot to be able to cancel/edit them
 - An incident occurs where a stale human-created event needs bot cleanup and the admin can't reach the Discord UI in time
 
-To flip: re-generate install URL with permissions integer `17601875988480` (adds `1 << 33` = `8589934592`), re-invite the bot, then update this doc's "pinned install configuration" section.
+To flip: re-generate install URL with permissions integer `17601044465664` (conservative `17592454531072` + `Manage Events` `8589934592` = `17601044465664` — recompute via the portal picker rather than trusting this number; the conservative-base integer shifts whenever a layer-2 permission is added, and integer arithmetic on Discord permission bitfields is famously easy to fat-finger).
 
 > **One-way-door warning:** removing a permission later is silent (no notification to anyone), but adding one requires re-invite. So conservative-first is the lower-regret default.
 
