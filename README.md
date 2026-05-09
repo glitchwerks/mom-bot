@@ -2,7 +2,7 @@
 
 Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
 
-**Status:** framework planning complete; Pre-Epic-0 audit pending. Implementation has not started.
+**Status:** Epic 0.1 scaffolding complete — package layout, tooling, and Dockerfile in place.
 
 ## Documentation
 
@@ -24,6 +24,57 @@ The plan defines 5 epics + 1 cross-cut + 1 pre-epic gate:
 | **Epic 4** | Cutover (deploy to new Azure RG `mom-bot-prod`, retire siege-bot + old reminder-bot) |
 
 See the framework plan for design decisions, scope locks, risks, and verification per epic.
+
+## Prerequisites
+
+- **Python 3.12** — `python --version` must show `3.12.x`
+- **[uv](https://github.com/astral-sh/uv)** — fast Python package manager (`pip install uv` or see uv docs)
+- **Docker** — for container smoke tests (`docker build .`)
+
+## Local Development
+
+```bash
+# 1. Create a virtual environment
+uv venv .venv
+
+# 2. Install the package and dev dependencies
+uv pip install -e ".[dev]"
+
+# 3. Run the test suite
+.venv/Scripts/python.exe -m pytest          # Windows
+# .venv/bin/python -m pytest               # Linux / macOS
+
+# 4. Lint and format checks
+.venv/Scripts/python.exe -m ruff check src/ tests/
+.venv/Scripts/python.exe -m black --check src/ tests/
+
+# 5. Type checking
+.venv/Scripts/python.exe -m mypy src/
+
+# 6. Container smoke build
+docker build .
+```
+
+## Project Structure
+
+```
+mom-bot/
+├── src/
+│   └── mom_bot/          # Main package (src-layout)
+│       ├── __init__.py   # Package version
+│       └── __main__.py   # `python -m mom_bot` entrypoint (placeholder)
+├── tests/
+│   └── test_smoke.py     # Baseline smoke test
+├── docs/                 # Design docs, framework plan
+├── pyproject.toml        # PEP 621 metadata, tool configs
+├── Dockerfile            # Container build (python:3.12-slim, non-root)
+└── .dockerignore
+```
+
+## References
+
+- Framework plan: [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md)
+- Tracking issue: [#12 — Epic 0.1 repo scaffolding](https://github.com/glitchwerks/mom-bot/issues/12)
 
 ## Versioning
 
