@@ -97,6 +97,7 @@ Endpoint shape:
 | **Versioning track** | Own product (`mom-bot v0.x`); runtime coupled to siege-web by design | Clean release-cadence separation, but operationally tied to siege-web. Don't oversell the separability |
 | **Discord scope** | Self-service reads + post-preference self-service writes + reminder management. No operator-ops, no admin-broadcast | Narrow, honest sizing. Web UI keeps owning operator workflows |
 | **Reminder JSON state migration** | NOT migrated; cutover timing rule (Epic 4) prevents duplicates | Migrating `reminders_sent.json` across machines / RGs / processes costs more than the bounded one-time risk of a duplicate ping after cutover |
+| **Azure region** | `eastus2` | Cohabitate with siege-web (lower sidecar latency); reminder-bot's `centralus` will be torn down at Epic 4 step 7 anyway, so no upside to inheriting that region. Locked `2026-05-08` |
 
 ## Slash command surface (concrete list)
 
@@ -195,8 +196,38 @@ Document findings in `pre-epic-0-checklist.md` (or as a tracked GitHub issue).
 
 **Owner:** repository admin / @cbeaulieu-gt (only person with confirmed Discord developer portal + cross-RG Azure access).
 
-### Epic 0 — Skeleton (mom_bot side only)
-New repo at `I:\games\raid\mom-bot`. Discord client connecting via inherited token (Key Vault reference). App Insights wired. CI green. SQLite + alembic baseline. Single `/ping` slash command for health-check. **`@deferred` decorator pattern committed as the only sanctioned interactive-command registration mechanism.** **No functionality yet.**
+### Epic 0 — Skeleton (mom_bot side only) + CI/CD baseline
+
+New repo at `I:\games\raid\mom-bot`. Discord client connecting via inherited token (Key Vault reference). App Insights wired. SQLite + alembic baseline. Single `/ping` slash command for health-check. **`@deferred` decorator pattern committed as the only sanctioned interactive-command registration mechanism.** **No functionality yet.**
+
+**CI/CD baseline ships in Epic 0 — not as a follow-up.** Lock now so every PR after Epic 0 starts gates on the same checks (issue #10 tracks). Implemented as `.github/workflows/ci.yml`; deploy workflow is separate at `.github/workflows/deploy.yml`.
+
+**CI gates (every PR, separate check entries per `feedback_ci_split_lint_and_test.md`):**
+
+| Job | Tool | Notes |
+|---|---|---|
+| Lint | `ruff check` | Matches CLAUDE.md python skill defaults |
+| Format check | `black --check` | No surprise reformat diffs |
+| Types | `mypy` (strict where pragmatic) | Catches Discord API and SQLAlchemy typing regressions |
+| Tests | `pytest` (full suite, no scoped runs) | Unit + integration |
+| Container build smoke | `docker build` (no push) | Verifies Dockerfile remains buildable |
+| Dependency security | `pip-audit` | Non-blocking initially; flip to blocking after stabilization |
+
+**Claude Code GitHub integrations** — mirror the workflow files from sibling repos (`siege-web/.github/workflows/claude-*.yml`) into mom-bot's `.github/workflows/` at Epic 0 time. Includes `@claude` mention triggers and any auto-review patterns the user runs as standard.
+
+**CD trigger — manual only via `workflow_dispatch` for v1.0.** Workflow accepts `target: dev | prod` input; runs `az containerapp update` (or `create` first time). Auto-deploy revisited after v1.0 ships.
+
+**Secrets — hybrid model:**
+
+| Class | Storage | Access |
+|---|---|---|
+| Build-time (test creds, codecov, dummy values) | GitHub Actions repo secrets | `${{ secrets.* }}` |
+| Deploy-time (prod Discord token, Azure deploy SP, Key Vault references) | Azure Key Vault | OIDC federated identity GHA → AAD; `az keyvault secret show` at job runtime |
+
+Provisioning at Epic 0:
+- Dedicated AAD app registration with federated credential trust for `glitchwerks/mom-bot` GHA workflows
+- Key Vault `Secret Get` role assigned to the AAD app on the mom-bot Key Vault
+- `docs/secrets-inventory.md` lists every secret name + purpose + class (no values)
 
 ### Epic 1 — Reminder lift-and-shift
 Port `clan/clan_reminders.py`, `clan/reminder_sent_store.py`, `clan/clan.py`, `discord_api/discordClient.py` into `mom_bot/reminders/`. Replace `%APPDATA%\siege_reminders\reminders_sent.json` with SQLite-backed `reminder_sent` table via alembic. Seed `reminders` table with `Hydra` and `Chimera` so behavior is unchanged at cutover. Reminders **not yet user-configurable** (Epic 3-adjacent).
@@ -336,7 +367,7 @@ Implement the locked command surface above. **Order — read-then-reminder-then-
 ## Verification per epic
 
 - **After Pre-Epic-0:** `pre-epic-0-checklist.md` exists, all bullets verified or have known follow-ups assigned. The "are gateway intents in place" question has a definitive yes/no with a confirmed remediation path if no.
-- **After Epic 0:** mom_bot connects to Discord (gateway connection succeeds with the inherited token — runtime confirmation of the Pre-Epic-0 token-inheritance assumption), `/ping` returns ephemeral pong (verified through `@deferred` decorator), `client.guilds[0].member_count` after `on_ready` matches the actual guild roster (runtime confirmation that `GUILD_MEMBERS` intent populates the member cache), App Insights receives traces, CI green on `mom-bot` repo. SQLite migration applies cleanly (empty schema baseline).
+- **After Epic 0:** mom_bot connects to Discord (gateway connection succeeds with the inherited token — runtime confirmation of the Pre-Epic-0 token-inheritance assumption), `/ping` returns ephemeral pong (verified through `@deferred` decorator), `client.guilds[0].member_count` after `on_ready` matches the actual guild roster (runtime confirmation that `GUILD_MEMBERS` intent populates the member cache), App Insights receives traces. SQLite migration applies cleanly (empty schema baseline). **All six CI checks (lint, format, types, tests, build smoke, pip-audit) report independently and pass on the first PR.** Claude github-actions workflows respond to `@claude` mention. Manual `deploy.yml` successfully deploys to dev Container App and rolls back cleanly.
 - **After Epic 1:** custom test reminder set 2 minutes in the future fires on time. SQLite migration applies cleanly. `Hydra` and `Chimera` rows seeded.
 - **After Epic 2:** siege-web's `DISCORD_BOT_API_URL` pointed at mom_bot's **dev** URL — exercise all 6 endpoints, all return same JSON shapes as today. Mom_bot version endpoint reports `mom-bot v0.x.y`.
 - **After Epic 2.5:** new `/api/members/me/preferences` endpoints work end-to-end. With header `X-Acting-Discord-Id` set to a known Discord ID, GET returns that member's preferences, PUT updates them. Without header (service token only), 401. With unknown Discord ID, 404. Cookie-authed (non-service) requests ignore the header.
@@ -354,7 +385,7 @@ These don't shape the framework but need answers before specific epics begin:
 5. **Tank-week externally-deleted handling** — when SQLite row exists but Discord event was deleted by admin via portal, should next tick alert or auto-recreate? Default: alert + manual recreate. Confirm.
 6. **Reminder-bot's exact RG / resource name** — Pre-Epic-0 deliverable; needed for the cutover runbook step 2 + 7
 7. **Repo visibility** (public / private / org-internal) — affects CI secret strategy in Epic 0
-8. **Azure region** — same as siege-web (East US 2) or different? — promoted from "TBD" to "actively pending" by Pre-Epic-0 typing: reminder-bot is in `centralus`, siege-web is presumably `eastus2`; mom-bot deploys fresh either way
+8. **Azure region** — ~~same as siege-web (East US 2) or different?~~ **Resolved `2026-05-08`: `eastus2`** (see Confirmed design decisions table). Cohabitate with siege-web; reminder-bot's `centralus` is being torn down regardless
 9. **Siege-web service token rotation cadence** — how often, and what's the rotation mechanism (Key Vault reference + Container App restart)?
 10. **App Insights instance shape** — separate (recommended for blast-radius isolation) or shared with siege-web (one-pane observability)?
 11. **Reminder schema timezone-awareness** — UTC-only (today's behavior) or guild-local? Decide before Epic 1 schema lands
