@@ -9,7 +9,7 @@ Two Discord bots run against a single Discord guild today, both authenticating w
 
 There is **no token contention today** because both workloads are **one-way / post-only** — neither maintains a continuously-connected Discord gateway. (Note: this changes for mom_bot, which DOES maintain a gateway connection because of slash commands. Validating the existing Discord app's gateway intents is a Pre-Epic-0 task.)
 
-This plan establishes the framework for consolidating both into a new product called **mom_bot**, hosted in a new repo at `I:\other\mom-bot`, with a new third capability: **interactive slash commands** scoped to (a) member self-service reads, (b) member self-service writes for post preferences only, and (c) reminder management.
+This plan establishes the framework for consolidating both into a new product called **mom_bot**, hosted in a new repo at `I:\games\raid\mom-bot`, with a new third capability: **interactive slash commands** scoped to (a) member self-service reads, (b) member self-service writes for post preferences only, and (c) reminder management.
 
 ## Goal
 
@@ -179,7 +179,7 @@ Document findings in `pre-epic-0-checklist.md` (or as a tracked GitHub issue).
 **Owner:** repository admin / @cbeaulieu-gt (only person with confirmed Discord developer portal + cross-RG Azure access).
 
 ### Epic 0 — Skeleton (mom_bot side only)
-New repo at `I:\other\mom-bot`. Discord client connecting via inherited token (Key Vault reference). App Insights wired. CI green. SQLite + alembic baseline. Single `/ping` slash command for health-check. **`@deferred` decorator pattern committed as the only sanctioned interactive-command registration mechanism.** **No functionality yet.**
+New repo at `I:\games\raid\mom-bot`. Discord client connecting via inherited token (Key Vault reference). App Insights wired. CI green. SQLite + alembic baseline. Single `/ping` slash command for health-check. **`@deferred` decorator pattern committed as the only sanctioned interactive-command registration mechanism.** **No functionality yet.**
 
 ### Epic 1 — Reminder lift-and-shift
 Port `clan/clan_reminders.py`, `clan/reminder_sent_store.py`, `clan/clan.py`, `discord_api/discordClient.py` into `mom_bot/reminders/`. Replace `%APPDATA%\siege_reminders\reminders_sent.json` with SQLite-backed `reminder_sent` table via alembic. Seed `reminders` table with `Hydra` and `Chimera` so behavior is unchanged at cutover. Reminders **not yet user-configurable** (Epic 3-adjacent).
@@ -258,7 +258,7 @@ Implement the locked command surface above. **Order — read-then-reminder-then-
 - `members.discord_id` already has `unique=True` constraint at `backend/app/models/member.py`. The implicit-`me` Discord-ID lookup is structurally unambiguous; no two-Members-with-same-discord_id resolution rule needed.
 
 ### Reusable patterns
-- **Worktree convention** — `I:\other\mom-bot\.worktrees\<branch>` matches the siege-web pattern
+- **Worktree convention** — `I:\games\raid\mom-bot\.worktrees\<branch>` matches the siege-web pattern
 - **Per-component versioning** — once siege-web's #311 plan lands, mom_bot adopts the same discipline (own `VERSION` file, runtime `/version` endpoint, `CHANGELOG.md` updated at tag-time)
 - **Single role-check decorator** for reminder management (`@require_admin_role`) — centralized; not inlined per command
 - **`@deferred` decorator** for interactive slash commands — the only registration path; failure-at-startup beats failure-at-invocation
