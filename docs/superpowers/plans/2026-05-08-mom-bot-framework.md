@@ -158,7 +158,8 @@ Before any mom_bot code work, complete these gating tasks:
 - Confirm gateway intents needed for slash commands are enabled (Application Commands; members intent if member-lookup commands need it)
 - Confirm `Manage Events` permission is in the bot's invite scope; if not, identify owner who can update via Discord developer portal
 - Confirm guild permissions: Send Messages, Embed Links, Use Application Commands, Manage Events
-- Confirm the existing token still works for the new gateway-connected workload (different from today's post-only usage)
+- Confirm `Application Commands` is enabled in the bot's invite scope (`applications.commands` OAuth2 scope, layer 1 — see `docs/discord-permissions-reference.md`)
+- Confirm `GUILD_MEMBERS` (Server Members Intent) is toggled ON in Developer Portal → Bot → Privileged Gateway Intents (configuration only — runtime verification deferred to Epic 0 verification, see § Verification per epic)
 
 **Fallback branch — if token inheritance is not feasible:**
 
@@ -319,7 +320,7 @@ Implement the locked command surface above. **Order — read-then-reminder-then-
 ## Verification per epic
 
 - **After Pre-Epic-0:** `pre-epic-0-checklist.md` exists, all bullets verified or have known follow-ups assigned. The "are gateway intents in place" question has a definitive yes/no with a confirmed remediation path if no.
-- **After Epic 0:** mom_bot connects to Discord, `/ping` returns ephemeral pong (verified through `@deferred` decorator), App Insights receives traces, CI green on `mom-bot` repo. SQLite migration applies cleanly (empty schema baseline).
+- **After Epic 0:** mom_bot connects to Discord (gateway connection succeeds with the inherited token — runtime confirmation of the Pre-Epic-0 token-inheritance assumption), `/ping` returns ephemeral pong (verified through `@deferred` decorator), `client.guilds[0].member_count` after `on_ready` matches the actual guild roster (runtime confirmation that `GUILD_MEMBERS` intent populates the member cache), App Insights receives traces, CI green on `mom-bot` repo. SQLite migration applies cleanly (empty schema baseline).
 - **After Epic 1:** custom test reminder set 2 minutes in the future fires on time. SQLite migration applies cleanly. `Hydra` and `Chimera` rows seeded.
 - **After Epic 2:** siege-web's `DISCORD_BOT_API_URL` pointed at mom_bot's **dev** URL — exercise all 6 endpoints, all return same JSON shapes as today. Mom_bot version endpoint reports `mom-bot v0.x.y`.
 - **After Epic 2.5:** new `/api/members/me/preferences` endpoints work end-to-end. With header `X-Acting-Discord-Id` set to a known Discord ID, GET returns that member's preferences, PUT updates them. Without header (service token only), 401. With unknown Discord ID, 404. Cookie-authed (non-service) requests ignore the header.
