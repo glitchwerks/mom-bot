@@ -51,7 +51,7 @@ The app registration needs a service principal so Azure RBAC can target it.
 $SpObjectId = az ad sp create --id $AppId --query id --output tsv
 
 Write-Host "SpObjectId=$SpObjectId"
-# Save this — it is passed as --parameters ghaServicePrincipalObjectId=$SpObjectId in Step 5.
+# Save this — it is exported as $env:GHA_SP_OBJECT_ID in Step 5.
 ```
 
 ---
@@ -105,27 +105,40 @@ Remove-Item $TempFile
 
 ---
 
-## Step 4 — (No file edit needed — passed via CLI in Step 5)
+## Step 4 — Export the SP Object ID as an environment variable
 
-The SP Object ID is captured in `$SpObjectId` from Step 2. We pass it directly
-to `az deployment sub create` in the next step rather than committing it to
-`infra/main.bicepparam`. This keeps the parameter file free of values that
-vary by provisioning run.
+The SP Object ID is captured in `$SpObjectId` from Step 2. Export it as
+`$env:GHA_SP_OBJECT_ID` before running the deploy so that `infra/main.bicepparam`
+can read it via `readEnvironmentVariable('GHA_SP_OBJECT_ID')`. This satisfies
+Bicep's strict `.bicepparam` contract (every declared param must have an
+assignment) while keeping the value out of the repo.
+
+```powershell
+$env:GHA_SP_OBJECT_ID = $SpObjectId
+```
 
 ---
 
 ## Step 5 — Deploy Bicep infrastructure
 
-The `ghaServicePrincipalObjectId=$SpObjectId` override supplies the SP object ID captured in Step 2, so it never lives in the parameter file.
+The `$env:GHA_SP_OBJECT_ID` env var (exported in Step 4) is read by
+`infra/main.bicepparam` via `readEnvironmentVariable('GHA_SP_OBJECT_ID')`,
+supplying the SP object ID captured in Step 2. This satisfies Bicep's strict
+bicepparam contract (every declared param must have an assignment) without
+committing the value to the repo.
 
 ```powershell
 az deployment sub create `
   --location eastus2 `
   --template-file infra/main.bicep `
   --parameters infra/main.bicepparam `
-  --parameters ghaServicePrincipalObjectId=$SpObjectId `
   --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
 ```
+
+> **Tip**: before running the deploy, validate the parameter file with
+> `az bicep build-params --file infra/main.bicepparam`. CI's
+> `az bicep build --file main.bicep` does NOT validate the bicepparam
+> against the template — `build-params` does.
 
 Bicep handles the Key Vault RBAC role assignments:
 
@@ -265,8 +278,8 @@ image to `ca-mom-bot`. First run succeeds if:
 - [ ] Step 2 — Service principal created; `$SpObjectId` saved
 - [ ] Step 3a — Federated credential for `main` push created
 - [ ] Step 3b — Federated credential for pull requests created
-- [ ] Step 4 — (acknowledged — no file edit needed)
-- [ ] Step 5 — Bicep deployed successfully (with `ghaServicePrincipalObjectId=$SpObjectId` override)
+- [ ] Step 4 — `$env:GHA_SP_OBJECT_ID` exported in session
+- [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)
 - [ ] Step 6 — Repo variables set in GitHub
 - [ ] Step 7 — Your user account has `Key Vault Secrets User`
 - [ ] Step 8 — Initial secrets seeded

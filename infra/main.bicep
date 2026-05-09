@@ -1,12 +1,12 @@
 // main.bicep — top-level orchestrator for mom-bot Azure infrastructure.
 // Scope: subscription — creates the resource group and delegates to modules.
 //
-// Deploy with:
-//   az deployment sub create \
-//     --location eastus2 \
-//     --template-file infra/main.bicep \
-//     --parameters infra/main.bicepparam \
-//     --parameters ghaServicePrincipalObjectId=$SpObjectId \
+// Deploy with (PowerShell):
+//   $env:GHA_SP_OBJECT_ID = $SpObjectId
+//   az deployment sub create `
+//     --location eastus2 `
+//     --template-file infra/main.bicep `
+//     --parameters infra/main.bicepparam `
 //     --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
 
 targetScope = 'subscription'
