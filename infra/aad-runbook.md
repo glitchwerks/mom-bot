@@ -127,7 +127,20 @@ supplying the SP object ID captured in Step 2. This satisfies Bicep's strict
 bicepparam contract (every declared param must have an assignment) without
 committing the value to the repo.
 
+The pre-flight guard catches the most common deploy failure mode: forgetting to re-export
+`GHA_SP_OBJECT_ID` after a `git pull` or in a fresh terminal session. Without it,
+`readEnvironmentVariable` returns the empty-string default, the KV role assignment receives
+an empty `principalId`, and Azure rejects the deploy 90 seconds in with `InvalidPrincipalId`.
+Failing at the pre-flight saves a few minutes of wasted deploy time.
+
 ```powershell
+$env:GHA_SP_OBJECT_ID = $SpObjectId
+
+# Pre-flight: refuse to deploy if the env var didn't survive (e.g. fresh shell)
+if (-not $env:GHA_SP_OBJECT_ID) {
+  throw "GHA_SP_OBJECT_ID is not set. Export it from `$SpObjectId (see Step 2) before re-running."
+}
+
 az deployment sub create `
   --location eastus2 `
   --template-file infra/main.bicep `
@@ -269,6 +282,26 @@ image to `ca-mom-bot`. First run succeeds if:
 
 > Image build+push to GHCR is Epic 1 work. For v0 smoke testing, push a
 > placeholder image manually and rerun.
+
+---
+
+## Notes
+
+### Placeholder container image
+
+The `containerImage` parameter defaults to `mcr.microsoft.com/k8se/quickstart:latest` —
+Microsoft's public Container Apps hello-world image. The Container App provisions and serves
+a static page until Epic 1 wires up image build+push to GHCR. To deploy a real mom-bot image
+at any time, override at the CLI:
+
+```powershell
+az deployment sub create `
+  --location eastus2 `
+  --template-file infra/main.bicep `
+  --parameters infra/main.bicepparam `
+  --parameters containerImage="ghcr.io/glitchwerks/mom-bot:<sha>" `
+  --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
+```
 
 ---
 

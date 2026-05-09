@@ -3,6 +3,7 @@
 //
 // Deploy with (PowerShell):
 //   $env:GHA_SP_OBJECT_ID = $SpObjectId
+//   if (-not $env:GHA_SP_OBJECT_ID) { throw "Set GHA_SP_OBJECT_ID first" }
 //   az deployment sub create `
 //     --location eastus2 `
 //     --template-file infra/main.bicep `
@@ -37,8 +38,8 @@ param containerAppName string = 'ca-mom-bot'
 @description('Object ID (principal ID) of the mom-bot-gha service principal. Run: az ad sp show --id <appId> --query id -o tsv')
 param ghaServicePrincipalObjectId string
 
-@description('Container image reference (ghcr.io/glitchwerks/mom-bot:<sha>).')
-param containerImage string = 'ghcr.io/glitchwerks/mom-bot:latest'
+@description('Container image reference. Defaults to Microsoft quickstart (always pullable) until Epic 1 wires up GHCR image build+push.')
+param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
 // ---------------------------------------------------------------------------
 // Resource group
