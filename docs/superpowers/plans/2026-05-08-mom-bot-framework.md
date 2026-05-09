@@ -199,6 +199,43 @@ Small siege-web PR:
 - Cross-link convention: mom_bot's Epic 3 issue body references the siege-web issue number; the siege-web issue body references mom_bot's Epic 3 issue
 - **What can proceed against pending Epic 2.5:** mom_bot Epic 3's *read* commands depend only on existing siege-web GET endpoints — they land independently. Only the *preferences-write* commands gate on Epic 2.5 merging. Sequence Epic 3's reads first; advance to writes only after Epic 2.5 ships
 
+### Epic 2.6 — Day-role sync (cross-cuts into siege-web)
+
+Port the day-role assignment feature from `clan/`: when a member is assigned to an attack day in siege-web, mom-bot toggles the corresponding `Attack Day N` Discord role on that member.
+
+**Architecture (locked):**
+
+- **Sync model — push from siege-web (real-time).** siege-web calls a new mom-bot sidecar endpoint whenever a Day-Assignment row changes. No polling loop in mom-bot; no scheduler involvement
+- **Lifecycle — persist until overwritten.** Day-roles stay on members between sieges; next siege's assignment changes overwrite them. No siege-state-change signal needed; no scheduler cleanup. Observable consequence: between sieges, role mentions reflect the prior siege's roster — surface this in the v1.0 release notes
+- **Role provisioning — pre-existing, admin-managed.** Discord roles named `Attack Day 1`, `Attack Day 2`, etc. are created by guild admins once. mom-bot only calls `member.add_roles()` / `member.remove_roles()` — never `guild.create_role()` / `role.delete()`. Smallest blast radius
+
+**Mom-bot side:**
+
+- Port `clan/` role-assignment code into `mom_bot/roles/`
+- New SQLite table `day_role_map(siege_kind, day_number, discord_role_id)` seeded once per guild via Pre-Epic-0 admin work
+- New sidecar endpoint `POST /api/internal/role-sync` (Bearer-auth, payload: `{discord_id, siege_id, day_number, action: 'assign'|'unassign'}`). Idempotent — siege-web may retry
+- App Insights logging for every role toggle (member, role, action, success/failure, layer-4-403 vs other failure modes)
+
+**Siege-web side (cross-repo, similar shape to Epic 2.5):**
+
+- Wire siege-web's Day-Assignment create/update/delete handlers to call mom-bot's `/api/internal/role-sync`
+- Fire-and-forget with retry (the Discord-side state will reconcile naturally on the NEXT assignment change for any member, so isolated drops are self-healing across normal usage)
+- Tracked as a separate sibling issue against siege-web, cross-linked from mom-bot's Epic 2.6 issue
+
+**Permission additions (gates Pre-Epic-0):**
+
+- Layer 2: add `Manage Roles` (`1 << 28`) to install bitfield. New conservative integer: `17592454531072`. See `docs/discord-permissions-reference.md` for the recomputed permissive variant
+- Layer 4: mom-bot's role must be ranked **above** every `Attack Day N` role in the guild's role list. Added to Pre-Epic-0 audit checklist (issue #1)
+
+**Out of scope, revisit conditions:**
+
+- Role cleanup at siege end — revisit if stale-role pings become an actual annoyance
+- Discord-side `/siege sync-roles` admin command for forced reconciliation — revisit if drift incidents happen
+- Auto-creation of missing `Attack Day N` role objects — revisit only if admin-managed pre-creation proves to be a recurring stumbling block
+- Bulk re-sync on bot restart — relies on push being reliable; revisit if push drops show up in telemetry
+
+**Position in epic graph:** lands between Epic 2.5 and Epic 3 because it depends on the sidecar surface (Epic 2) but doesn't gate on the slash-command interactive surface (Epic 3). The siege-web outbound-call sibling issue lands in parallel — same cadence as Epic 2.5.
+
 ### Epic 3 — Interactive slash commands
 
 Implement the locked command surface above. **Order — read-then-reminder-then-tank-week-then-writes — sequenced so SQLite-writer surface is exercised on simpler ground first:**
@@ -243,6 +280,7 @@ Implement the locked command surface above. **Order — read-then-reminder-then-
 - `I:\games\raid\siege\discord_api\discordClient.py` — `DiscordAPI` wrapper (~80 lines)
 - `I:\games\raid\siege\guild_config.ini` — static config (channels, reminder times) — port to SQLite seed
 - `I:\games\raid\siege\tests\test_reminder*.py` — port over
+- `I:\games\raid\siege\clan\` — locate day-role-assignment module (likely a `*role*.py` or `*assignment*.py` file; pre-Epic-1 grep to identify exact paths). Port logic into `mom_bot/roles/`
 
 ### Target: siege-web — Epic 2.5 modifies
 - `I:\games\raid\siege-web\backend\app\dependencies\auth.py` — `get_current_user` extended to read `X-Acting-Discord-Id` header on service-token paths
@@ -270,6 +308,7 @@ Implement the locked command surface above. **Order — read-then-reminder-then-
 | **Self-service `me` resolves to wrong Member.** Bug in mom_bot supplies wrong invoker's Discord ID. | High | Single helper `set_acting_discord_id(invoker)` — every interactive write goes through it. Audit log every `/me/preferences` write to mom_bot's local SQLite with both Discord ID and resolved member ID for after-the-fact verification. Integration tests verify two distinct Discord users see distinct preferences |
 | **Reminder admin role-check bug.** A bug in `@require_admin_role` lets any guild member modify reminders. | Medium | Single decorator, never inlined. Unit tests covering every role × command. Integration test: role-less fake user invokes `/reminder add` → expect unauthorized embed. Log every privileged invocation to App Insights |
 | **siege-web API unavailable during interactive commands.** Discord users see hung interactions or timeout errors. | Medium | `defer()` immediately on every interactive command (enforced by `@deferred`); 10s timeout on outbound httpx calls; circuit-breaker that flips after sustained failure; fallback embed: *"Siege-web is currently unavailable. Try again in a few minutes, or use the web UI at <url>."* |
+| **Day-role sync drift after dropped webhook calls.** siege-web push fails (network blip, mom-bot down); Discord roles get out of sync with siege-web's day-board. | Low | Self-healing in normal usage: the NEXT assignment change for any drifted member fires a fresh push that reconciles. App Insights alerting on 5xx responses from mom-bot's `/api/internal/role-sync` surfaces sustained drift. Manual `/siege sync-roles` recovery command deferred (out of scope) but design doesn't preclude adding it later |
 | **Cutover duplicate-reminder risk.** Today's `reminders_sent.json` state isn't migrated; if mom_bot deploys near a reminder-fire time, the reminder might fire from both old and new bot. | Low | Cutover-time-of-day rule: **Thursday or Friday post-13:00 UTC** ensures both Hydra (Tue) and Chimera (Wed) reminders have already fired earlier in the week. Avoids the Wednesday-12:00 edge case where Chimera fires concurrent with cutover |
 | **Member-not-registered self-service.** Discord user issues `/siege preferences set` but they're not in the siege Member roster. | Low | Endpoint returns 404; bot embed: *"You're not registered as a clan member yet. Ask leadership to add you."* No silent failure |
 | **Tank-week duplicate creation on bot restart.** Without idempotency tracking, scheduler check on restart could create a second event for the same month. | Low | SQLite-tracked event IDs in `tank_week_events(year, month, discord_event_id, source)` — bot is source of truth for what it created. Before creating, query the table; no-op on existing row. Avoids the string-pattern fragility of matching against Discord's event names |
@@ -309,10 +348,10 @@ These don't shape the framework but need answers before specific epics begin:
 
 ## Sequencing relative to siege-web's v1.2
 
-Mom_bot is its own track. The only sync point is **Epic 2.5** which lands as a v1.2 ticket in siege-web. v1.2's other work (per-component versioning discipline #311, lock siege mutations #242, validation message hygiene #321) is independent of mom_bot.
+Mom_bot is its own track. There are two sync points with siege-web v1.2: **Epic 2.5** (preferences `/me/` endpoints) and **Epic 2.6** (outbound webhook from Day-Assignment changes to mom-bot's role-sync endpoint). Both land as v1.2 tickets in siege-web. v1.2's other work (per-component versioning discipline #311, lock siege mutations #242, validation message hygiene #321) is independent of mom_bot.
 
 ```
-siege-web track:    v1.1 (shipped) ──→ v1.2 (in-flight, includes Epic 2.5) ──→ v1.3 ...
-                                                ↓ (sync point)
-mom-bot track:      Pre-0 ──→ Epic 0 ──→ Epic 1 ──→ Epic 2 ───────→ Epic 3 ──→ Epic 4 ──→ v1.0
+siege-web track:    v1.1 (shipped) ──→ v1.2 (in-flight, Epic 2.5 + 2.6 outbound) ──→ v1.3 ...
+                                                ↓ (sync points)
+mom-bot track:      Pre-0 ──→ Epic 0 ──→ Epic 1 ──→ Epic 2 ──→ Epic 2.6 ──→ Epic 3 ──→ Epic 4 ──→ v1.0
 ```
