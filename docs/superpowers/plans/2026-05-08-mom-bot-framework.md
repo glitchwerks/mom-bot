@@ -175,6 +175,22 @@ If the audit reveals that the existing token cannot be inherited for mom_bot's g
   - App Service: `az webapp stop -g <RG> -n <name>`
 - Knowing the type matters because each has different stop semantics and cost/restart implications
 
+**Resolved (`2026-05-08`):**
+
+The reminder-bot lives on an Azure **VM** (not a managed container/function service):
+
+- Resource type: VM (`Microsoft.Compute/virtualMachines`)
+- Name: `raid-bot`
+- Resource group: `raid-bot`
+- Location: `centralus`
+- Stop command for Cutover step 2: `az vm deallocate -g raid-bot -n raid-bot --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0`
+
+**Implications surfaced by this resolution:**
+
+- The reminder-bot today has no built-in restart policy; uptime depends on whatever runs the Python loop on the VM (systemd, cron, `nohup`). Mom-bot's Container Apps `restart-as-recovery` model is a real operational improvement, not just a re-platforming
+- The VM is in `centralus`; siege-web is presumably `eastus2` (see Open Question #8). Mom-bot deploys fresh in its own region — deciding `centralus` (cohabitate with reminder-bot) vs `eastus2` (cohabitate with siege-web) is now an actively-pending decision rather than a future one. Cross-region API calls between mom-bot's sidecar and siege-web add ~25-30ms round-trip; for the sidecar's request rate this is operationally negligible but worth recording
+- Epic 4 step 7 (decommission reminder-bot's Azure resource) is more involved than `az vm delete` alone — see the Cutover runbook update below
+
 Document findings in `pre-epic-0-checklist.md` (or as a tracked GitHub issue).
 
 **Owner:** repository admin / @cbeaulieu-gt (only person with confirmed Discord developer portal + cross-RG Azure access).
@@ -255,12 +271,12 @@ Implement the locked command surface above. **Order — read-then-reminder-then-
 | Step | Credential / persona |
 | --- | --- |
 | 1. Stop siege-bot Container App in `siege-web-prod` RG | siege-web's deploy credential (Azure CLI `az containerapp stop` or via siege-web's existing deploy workflow extended with a stop mode) |
-| 2. Stop reminder-bot's Azure resource (per-type command parameterized by Pre-Epic-0 typed answer: `az containerapp stop` / `az vm deallocate` / `az functionapp stop` / `az webapp stop`) | Owner of reminder-bot's Azure RG (same person/credential as today's deployer of that resource) |
+| 2. Stop reminder-bot VM: `az vm deallocate -g raid-bot -n raid-bot --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0` (VM enters `Stopped (deallocated)` state — no compute charges, OS disk retained) | Owner of `raid-bot` RG in subscription `213aa1f8...` (tenant `48bca6c3-...` / `cmbdevoutlook333.onmicrosoft.com`) |
 | 3. Verify mom_bot is sole holder of the Discord token (no contention) | Visual check via Discord developer portal's online-sessions view |
 | 4. Flip siege-web's `DISCORD_BOT_API_URL` env var from siege-bot's URL to mom_bot's prod URL | siege-web's deploy credential; updates Container App env var via Azure CLI or portal |
 | 5. Verify siege-web → mom_bot calls work (post a test image, send a test DM) | Anyone with siege-web admin access |
 | 6. Decommission old siege-bot Container App | siege-web's deploy credential |
-| 7. Decommission reminder-bot's Azure resource | Owner of reminder-bot's RG |
+| 7. Decommission reminder-bot resources in `raid-bot` RG. **Multi-step — VM has 8 ancillary resources.** Recommended order: (a) verify VM has been stopped for ≥ 7 days with no incidents (rollback window), (b) `az vm delete -g raid-bot -n raid-bot --yes`, (c) detach + delete OS disk `raid-bot_OsDisk_1_5a285f3d3bb94573a14343af8a96dd79` (or retain as 30-day archive), (d) delete public IPs `raid-bot-vm-ip` and `raid-bot-ip-e710d0f4`, NIC `raid-bot254-e710d0f4`, NSGs `raid-bot-vm-nsg` and `raid-bot-nsg`, vNet `vnet-centralus`, SSH key `raid-bot-vm_key`. Or simpler: `az group delete -g raid-bot --yes --no-wait` after confirming nothing else lives there | Owner of `raid-bot` RG |
 
 **Pre-cutover checklist** captures the specific RG and resource name for reminder-bot's deployment, the specific URL for mom_bot's prod sidecar, and the rollback procedure (re-flip `DISCORD_BOT_API_URL` back; restart siege-bot's old Container App).
 
@@ -338,7 +354,7 @@ These don't shape the framework but need answers before specific epics begin:
 5. **Tank-week externally-deleted handling** — when SQLite row exists but Discord event was deleted by admin via portal, should next tick alert or auto-recreate? Default: alert + manual recreate. Confirm.
 6. **Reminder-bot's exact RG / resource name** — Pre-Epic-0 deliverable; needed for the cutover runbook step 2 + 7
 7. **Repo visibility** (public / private / org-internal) — affects CI secret strategy in Epic 0
-8. **Azure region** — same as siege-web (East US 2) or different?
+8. **Azure region** — same as siege-web (East US 2) or different? — promoted from "TBD" to "actively pending" by Pre-Epic-0 typing: reminder-bot is in `centralus`, siege-web is presumably `eastus2`; mom-bot deploys fresh either way
 9. **Siege-web service token rotation cadence** — how often, and what's the rotation mechanism (Key Vault reference + Container App restart)?
 10. **App Insights instance shape** — separate (recommended for blast-radius isolation) or shared with siege-web (one-pane observability)?
 11. **Reminder schema timezone-awareness** — UTC-only (today's behavior) or guild-local? Decide before Epic 1 schema lands
