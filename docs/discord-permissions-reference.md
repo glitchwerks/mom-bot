@@ -135,16 +135,20 @@ If you find yourself relying on the URL Generator as the canonical install path,
 
 The Installation tab is Discord's source of truth; this doc is the project's source of truth. They should agree. If the Discord application is ever recreated (account loss, fresh start), the "Pinned install configuration" section below is the recipe to recreate the same setup.
 
-### Pinned install configuration (filled in once Pre-Epic-0 audit completes)
+### Pinned install configuration
 
-> The values below are placeholders until the audit confirms token inheritance is feasible. Update via PR after Pre-Epic-0 closes.
+> Confirmed via Discord Developer Portal Installation tab on `2026-05-08`. Update via PR if defaults change.
 
-- **Application ID:** `<TBD-pre-epic-0>`
-- **OAuth2 scopes:** `bot applications.commands`
-- **Permissions integer:** `17592454531072` (conservative — see Layer 2)
-- **Install URL:** `https://discord.com/oauth2/authorize?client_id=<APP_ID>&scope=bot+applications.commands&permissions=17592454531072`
-- **Privileged gateway intents enabled in portal:** `GUILD_MEMBERS`
-- **Code-side intents flag:** `GUILDS | GUILD_MEMBERS | GUILD_SCHEDULED_EVENTS`
+- **Application ID:** `1362590154002530494`
+- **Install Link (canonical):** `https://discord.com/oauth2/authorize?client_id=1362590154002530494`
+  - This is the Installation-tab link format. Discord stores `scope` and `permissions` server-side; the URL itself does not echo them. Editing the Default Install Settings in the portal silently changes what this link installs
+- **Saved scopes (Default Install Settings → Guild Install):** `bot`, `applications.commands` — pending visual reconfirmation in the portal
+- **Saved permissions integer (Default Install Settings → Guild Install):** `17592454531072` (conservative profile — see Layer 2) — pending visual reconfirmation in the portal
+- **Privileged gateway intents enabled in portal:** `GUILD_MEMBERS` ✓ confirmed `2026-05-08`
+- **Code-side intents flag (to be set in mom-bot's `Intents(...)` at Epic 0):** `GUILDS | GUILD_MEMBERS | GUILD_SCHEDULED_EVENTS`
+- **URL Generator equivalent (for reference only — NOT the canonical link):** `https://discord.com/oauth2/authorize?client_id=1362590154002530494&scope=bot+applications.commands&permissions=17592454531072`
+
+> The "URL Generator equivalent" is included as a sanity-check reference: if you ever need to verify what the Installation tab is *currently configured to install*, generate this URL via OAuth2 → URL Generator with the conservative permissions ticked, and compare. Drift between the two URLs is the signal that someone edited the Installation tab defaults outside this doc.
 
 ## Permissive variant — when to flip
 
