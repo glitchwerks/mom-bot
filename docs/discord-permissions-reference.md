@@ -10,8 +10,8 @@ Discord permissions are split across six distinct configuration surfaces. The sa
 
 | # | Layer | Where configured | What it controls |
 |---|---|---|---|
-| 1 | **OAuth2 scopes** | Developer Portal → OAuth2 → URL Generator (or Installation tab) | What the *application* installs as |
-| 2 | **Bot install bitfield** | Same install URL, `permissions=` integer | Default permissions the bot's role gets at invite time |
+| 1 | **OAuth2 scopes** | Developer Portal → Installation tab (preferred, persistent) — or OAuth2 → URL Generator (one-off scratchpad) | What the *application* installs as |
+| 2 | **Bot install bitfield** | Same screen as layer 1 — Installation tab → Default Install Settings → Permissions picker (or URL Generator's Permissions section). Stored as the `permissions=` integer in the Install Link | Default permissions the bot's role gets at invite time |
 | 3 | **Gateway intents** | Developer Portal → Bot tab + `Intents(...)` in code | Which real-time events the bot subscribes to |
 | 4 | **Guild role permissions** | Server Settings → Roles → bot's role | Actual permissions the bot's role has in the guild (admins can override layer 2) |
 | 5 | **Channel permission overwrites** | Channel → Edit Channel → Permissions | Per-channel grant/deny on top of layer 4 |
@@ -95,11 +95,32 @@ For each **destination channel** mom-bot posts to:
 
 ## Saving / persisting the install configuration
 
-Discord doesn't have a "save install template" CLI, but there are three durable artifacts:
+**Use the Installation tab as the canonical save mechanism.** It is the only Discord-side surface that stores the configuration permanently and travels with the application itself.
 
-1. **Developer Portal → Installation tab** — set "Default Install Settings" (scopes + permissions integer) once. The portal then exposes a permanent "Install Link" that uses these defaults. This is the closest thing to a saved template — it travels with the application itself, survives session, and any future re-invite uses the same configuration.
-2. **OAuth2 URL Generator** — produces a one-off URL for ad-hoc installs. Useful for testing variations; not durable.
-3. **This doc + the actual install URL committed below** — the canonical project-side record. If the Discord application is ever recreated, the bitfield integer + scope list here is the recipe to recreate it.
+### Recommended: Installation tab → Default Install Settings
+
+1. Developer Portal → mom-bot app → **Installation** (left sidebar)
+2. Under **Default Install Settings → Guild Install**:
+   - **Scopes:** tick `bot` and `applications.commands`
+   - **Permissions:** open the picker and tick the layer-2 permissions from this doc — `Send Messages`, `Embed Links`, `Attach Files`, `Create Events`
+3. Click **Save Changes**. Discord computes the bitfield and stores it on the application
+4. The page now exposes a permanent **Install Link** at the top — copy it into the "Pinned install configuration" section below
+5. (Optional) Under **Authorization Methods**, leave only **Discord Provided Link** enabled to disable ad-hoc installs entirely
+
+The link encodes the *application's stored defaults at the time of click*, not the time the link was copied. So one Install Link, indefinitely re-used, always reflects the current saved configuration. To change permissions later: edit the defaults, save, re-invite — same link, new perms.
+
+### Not recommended for canonical save: OAuth2 → URL Generator
+
+The URL Generator is a scratchpad: every visit resets the pickers, the URL it generates is the only output, and there's no concept of "saved defaults." Useful for:
+
+- Generating an alternate install URL with different perms for testing
+- Generating a user-install URL (`integration_type=1`) variant
+
+If you find yourself relying on the URL Generator as the canonical install path, that's a sign you should move the configuration to the Installation tab instead.
+
+### Project-side record
+
+The Installation tab is Discord's source of truth; this doc is the project's source of truth. They should agree. If the Discord application is ever recreated (account loss, fresh start), the "Pinned install configuration" section below is the recipe to recreate the same setup.
 
 ### Pinned install configuration (filled in once Pre-Epic-0 audit completes)
 
