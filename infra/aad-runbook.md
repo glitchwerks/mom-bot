@@ -49,7 +49,7 @@ The app registration needs a service principal so Azure RBAC can target it.
 $SpObjectId = az ad sp create --id $AppId --query id --output tsv
 
 Write-Host "SpObjectId=$SpObjectId"
-# Save this — it is the ghaServicePrincipalObjectId parameter in main.bicepparam.
+# Save this — it is passed as --parameters ghaServicePrincipalObjectId=$SpObjectId in Step 6.
 ```
 
 ---
@@ -103,25 +103,25 @@ Remove-Item $TempFile
 
 ---
 
-## Step 4 — Update `main.bicepparam`
+## Step 5 — (No file edit needed — passed via CLI in Step 6)
 
-Open `infra/main.bicepparam` and replace the placeholder:
-
-```
-param ghaServicePrincipalObjectId = 'REPLACE_AFTER_AAD_RUNBOOK'
-```
-
-with the `$SpObjectId` value from Step 2.
+The SP Object ID is captured in `$SpObjectId` from Step 2. We pass it directly
+to `az deployment sub create` in the next step rather than committing it to
+`infra/main.bicepparam`. This keeps the parameter file free of values that
+vary by provisioning run.
 
 ---
 
-## Step 5 — Deploy Bicep infrastructure
+## Step 6 — Deploy Bicep infrastructure
+
+The `ghaServicePrincipalObjectId=$SpObjectId` override supplies the SP object ID captured in Step 2, so it never lives in the parameter file.
 
 ```powershell
 az deployment sub create `
   --location eastus2 `
   --template-file infra/main.bicep `
   --parameters infra/main.bicepparam `
+  --parameters ghaServicePrincipalObjectId=$SpObjectId `
   --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 `
   --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
 ```
@@ -155,7 +155,7 @@ az role assignment create `
 
 ---
 
-## Step 6 — Set GitHub repo variables
+## Step 7 — Set GitHub repo variables
 
 These are **Variables** (not Secrets — they are non-sensitive OIDC identifiers).
 `gh variable set` writes them directly from the values captured in earlier steps.
@@ -168,7 +168,7 @@ gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc
 
 ---
 
-## Step 7 — Grant yourself Key Vault access for local dev
+## Step 8 — Grant yourself Key Vault access for local dev
 
 Your own user account needs `Key Vault Secrets User` on the KV to read
 `dev-*` secrets locally via `az login` + `DefaultAzureCredential`.
@@ -176,7 +176,7 @@ Your own user account needs `Key Vault Secrets User` on the KV to read
 ```powershell
 $MyObjectId = az ad signed-in-user show --query id -o tsv
 
-# Capture the KV resource ID if you did not run the manual fallback in Step 5.
+# Capture the KV resource ID if you did not run the manual fallback in Step 6.
 $KvScope = az keyvault show --name kv-mombot-eastus2 --resource-group mom-bot --query id -o tsv
 
 az role assignment create `
@@ -188,7 +188,7 @@ az role assignment create `
 
 ---
 
-## Step 8 — Seed initial secrets
+## Step 9 — Seed initial secrets
 
 For each secret, paste the real value when prompted or supply it inline. Do not
 commit actual token values. If you prefer to avoid the value appearing in your
@@ -238,7 +238,7 @@ az keyvault secret set `
 
 ---
 
-## Step 9 — Run the deploy workflow
+## Step 10 — Run the deploy workflow
 
 Trigger the first deploy via GitHub Actions:
 
@@ -250,7 +250,7 @@ The workflow (`deploy.yml`) runs `az containerapp update` to push the container
 image to `ca-mom-bot`. First run succeeds if:
 
 1. AAD federated credentials are in place (Steps 1–3)
-2. Repo variables are set (Step 6)
+2. Repo variables are set (Step 7)
 3. A container image exists at `ghcr.io/glitchwerks/mom-bot:<sha>`
 
 > Image build+push to GHCR is Epic 1 work. For v0 smoke testing, push a
@@ -264,9 +264,9 @@ image to `ca-mom-bot`. First run succeeds if:
 - [ ] Step 2 — Service principal created; `$SpObjectId` saved
 - [ ] Step 3a — Federated credential for `main` push created
 - [ ] Step 3b — Federated credential for pull requests created
-- [ ] Step 4 — `main.bicepparam` updated with `$SpObjectId`
-- [ ] Step 5 — Bicep deployed successfully
-- [ ] Step 6 — Repo variables set in GitHub
-- [ ] Step 7 — Your user account has `Key Vault Secrets User`
-- [ ] Step 8 — Initial secrets seeded
-- [ ] Step 9 — First `workflow_dispatch` run of `deploy.yml` succeeds
+- [ ] Step 5 — (acknowledged — no file edit needed)
+- [ ] Step 6 — Bicep deployed successfully (with `ghaServicePrincipalObjectId=$SpObjectId` override)
+- [ ] Step 7 — Repo variables set in GitHub
+- [ ] Step 8 — Your user account has `Key Vault Secrets User`
+- [ ] Step 9 — Initial secrets seeded
+- [ ] Step 10 — First `workflow_dispatch` run of `deploy.yml` succeeds

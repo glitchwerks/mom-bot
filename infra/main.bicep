@@ -6,6 +6,7 @@
 //     --location eastus2 \
 //     --template-file infra/main.bicep \
 //     --parameters infra/main.bicepparam \
+//     --parameters ghaServicePrincipalObjectId=$SpObjectId \
 //     --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
 
 targetScope = 'subscription'
