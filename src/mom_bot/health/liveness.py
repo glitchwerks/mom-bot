@@ -98,7 +98,7 @@ def _container_uptime_seconds() -> float:
         starttime_ticks = int(fields[21])
 
         # os.sysconf is POSIX-only; AttributeError is caught below on Windows.
-        clk_tck: int = os.sysconf("SC_CLK_TCK")  # type: ignore[attr-defined]
+        clk_tck: int = os.sysconf("SC_CLK_TCK")  # type: ignore[attr-defined, unused-ignore]
         starttime_seconds: float = starttime_ticks / clk_tck
 
         # Age of PID 1 = boot_uptime - starttime_from_boot
