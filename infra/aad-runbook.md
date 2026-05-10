@@ -221,51 +221,90 @@ az role assignment create `
 
 ## Step 8 — Seed initial secrets
 
-For each secret, paste the real value when prompted or supply it inline. Do not
-commit actual token values. If you prefer to avoid the value appearing in your
-terminal history, use `Read-Host -AsSecureString` and convert — but for a
-one-time setup, plain inline paste is fine.
+The bot reads secrets from Key Vault at runtime via `mom_bot.config.load_secret`,
+prefixing each name with `<MOM_BOT_ENV>-`. So `dev-` secrets are used in local dev
+(laptop), and `prod-` secrets in the deployed Container App.
 
-See `docs/secrets-inventory.md` for the full list of secret names and their
-expected formats.
+Token-class secrets in this section are read interactively via
+`Read-Host -AsSecureString` rather than passed inline as `--value "..."`. This
+avoids the trailing-whitespace and copy-paste-newline pitfalls that cause
+Discord/Azure to silently reject "valid-looking" tokens.
+
+See `docs/secrets-inventory.md` for the full secret catalog, expected formats,
+and a column indicating which secrets share the same value across environments.
+
+### Discord bot token — same value in both env slots
+
+If you have **one Discord application** (one bot, invited to multiple guilds),
+the same token authenticates in every guild. Both `dev-discord-token` and
+`prod-discord-token` hold the same value — you paste it once and write it twice.
+
+(If you ever create a separate dev-only bot application, the values will diverge.
+See "When to split into two bot applications" at the bottom of this section.)
 
 ```powershell
-# Discord bot token (prod)
-az keyvault secret set `
-  --vault-name kv-mombot-eastus2 `
-  --name prod-discord-token `
-  --value "<paste prod token>"
+# Paste once — won't echo to terminal:
+$secureToken = Read-Host "Paste your Discord bot token" -AsSecureString
+$token = [System.Net.NetworkCredential]::new("", $secureToken).Password
 
-# Discord bot token (dev — your test bot or same token for local dev)
-az keyvault secret set `
-  --vault-name kv-mombot-eastus2 `
-  --name dev-discord-token `
-  --value "<paste dev token>"
-
-# Database URL (prod — SQLite path on Container Apps volume, or Postgres later)
-az keyvault secret set `
-  --vault-name kv-mombot-eastus2 `
-  --name prod-database-url `
-  --value "sqlite:////data/mom_bot.db"
-
-# Database URL (dev — local SQLite)
-az keyvault secret set `
-  --vault-name kv-mombot-eastus2 `
-  --name dev-database-url `
-  --value "sqlite:///./mom_bot_dev.db"
-
-# App Insights connection string (placeholder — provisioning is Epic 1+)
-# Leave these empty or set placeholder until App Insights is provisioned.
-az keyvault secret set `
-  --vault-name kv-mombot-eastus2 `
-  --name prod-app-insights-conn-string `
-  --value "PLACEHOLDER"
-
-az keyvault secret set `
-  --vault-name kv-mombot-eastus2 `
-  --name dev-app-insights-conn-string `
-  --value "PLACEHOLDER"
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-discord-token --value $token | Out-Null
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-discord-token --value $token | Out-Null
 ```
+
+### Guild IDs — different per environment
+
+Each Discord server has its own ID. Right-click your server name in Discord
+(with Developer Mode on: User Settings → Advanced → Developer Mode) → "Copy
+Server ID".
+
+Guild IDs are public identifiers — they are safe to echo to the terminal.
+
+```powershell
+$devGuildId  = Read-Host "Paste your DEV guild ID (test server)"
+$prodGuildId = Read-Host "Paste your PROD guild ID (real server)"
+
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-guild-id  --value $devGuildId  | Out-Null
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-guild-id --value $prodGuildId | Out-Null
+```
+
+### Database URL — different per environment
+
+```powershell
+# Local dev: SQLite file in the working directory
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-database-url  --value "sqlite:///./mom_bot_dev.db" | Out-Null
+
+# Prod: SQLite on Container Apps volume (placeholder for PostgreSQL in Epic 1+)
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-database-url --value "sqlite:////data/mom_bot.db" | Out-Null
+```
+
+### App Insights connection string — placeholder until Epic 1
+
+```powershell
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-app-insights-conn-string  --value "PLACEHOLDER" | Out-Null
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-app-insights-conn-string --value "PLACEHOLDER" | Out-Null
+```
+
+### Verify all expected secrets exist
+
+```powershell
+az keyvault secret list --vault-name kv-mombot-eastus2 --query "[].name" -o tsv
+```
+
+You should see, at minimum:
+
+- `dev-discord-token`, `prod-discord-token`
+- `dev-guild-id`, `prod-guild-id`
+- `dev-database-url`, `prod-database-url`
+- `dev-app-insights-conn-string`, `prod-app-insights-conn-string`
+
+### When to split into two bot applications
+
+For now, **one mom-bot application** invited to both your dev guild and your prod
+guild is sufficient. If you later want full prod isolation — slash-command changes
+in dev that don't affect prod, a separate avatar or status, independent token
+rotation — create a second Discord application named `mom-bot-dev`, invite it to
+your dev guild only, and store its token in `dev-discord-token` (overwriting the
+shared value). At that point the two slots legitimately diverge.
 
 ---
 

@@ -15,18 +15,23 @@ All secrets follow the pattern `<env>-<name>`:
 - `dev-*` — read by developer laptops via `az login` + `DefaultAzureCredential`
 - `prod-*` — read by `mi-mom-bot` (Container App managed identity) at runtime
 
+Most secrets vary by environment. A notable exception: `discord-token` holds the
+**same value** in both the `dev-` and `prod-` slots while a single bot application
+serves both environments. The "Same in dev/prod?" column in the inventory below
+makes this explicit so you know whether to paste once or twice during seeding.
+
 ## Inventory
 
-| Secret name (in KV) | Purpose | Class | Source / owner | Rotation cadence |
-|---|---|---|---|---|
-| `dev-discord-token` | Discord bot OAuth token for local dev (may be the same shared token or a test-bot token) | Runtime | Discord Developer Portal — @cbeaulieu-gt | On compromise; otherwise never unless moving to test bot |
-| `prod-discord-token` | Discord bot OAuth token for production | Runtime | Discord Developer Portal — @cbeaulieu-gt | On compromise; otherwise never (token is tied to the app registration, not the user) |
-| `dev-database-url` | SQLAlchemy connection URL for local dev (SQLite file) | Runtime | Developer-set; default `sqlite:///./mom_bot_dev.db` | N/A (SQLite local path) |
-| `prod-database-url` | SQLAlchemy connection URL for prod (SQLite on Container Apps volume, or Postgres later) | Runtime | Infra provisioning; default `sqlite:////data/mom_bot.db` | When DB backend changes (e.g. migrate to Postgres at v1.x) |
-| `dev-guild-id` | Discord server (guild) ID for the dev guild — used to register guild-scoped slash commands instantly at startup | Runtime | Discord Developer Portal — enable Developer Mode, then right-click the server icon → Copy ID | Static — only changes when migrating to a new guild |
-| `prod-guild-id` | Discord server (guild) ID for the production guild — same purpose as `dev-guild-id` | Runtime | Discord Developer Portal — enable Developer Mode, then right-click the server icon → Copy ID | Static — only changes when migrating to a new guild |
-| `dev-app-insights-conn-string` | Azure Application Insights connection string for local dev (placeholder until Epic 1+) | Runtime | Azure portal — @cbeaulieu-gt | On workspace recreation; set to `PLACEHOLDER` until provisioned |
-| `prod-app-insights-conn-string` | Azure Application Insights connection string for prod (placeholder until Epic 1+) | Runtime | Azure portal — @cbeaulieu-gt | On workspace recreation; set to `PLACEHOLDER` until provisioned |
+| Secret name (in KV) | Same in dev/prod? | Purpose | Class | Source / owner | Rotation cadence |
+|---|---|---|---|---|---|
+| `dev-discord-token` | Yes — single bot app (paste once, write twice; see runbook Step 8) | Discord bot OAuth token for local dev | Runtime | Discord Developer Portal — @cbeaulieu-gt | On compromise; or when splitting into a separate dev bot application |
+| `prod-discord-token` | Yes — single bot app (same value as `dev-discord-token`) | Discord bot OAuth token for production | Runtime | Discord Developer Portal — @cbeaulieu-gt | On compromise; or when splitting into a separate dev bot application |
+| `dev-guild-id` | No — different Discord server per environment | Discord server (guild) ID for the dev guild — used to register guild-scoped slash commands instantly at startup | Runtime | Discord Developer Portal — enable Developer Mode, then right-click the server icon → Copy ID | Static — only changes when migrating to a new guild |
+| `prod-guild-id` | No — different Discord server per environment | Discord server (guild) ID for the production guild — same purpose as `dev-guild-id` | Runtime | Discord Developer Portal — enable Developer Mode, then right-click the server icon → Copy ID | Static — only changes when migrating to a new guild |
+| `dev-database-url` | No — local SQLite vs Azure storage | SQLAlchemy connection URL for local dev (SQLite file) | Runtime | Developer-set; default `sqlite:///./mom_bot_dev.db` | N/A (SQLite local path) |
+| `prod-database-url` | No — local SQLite vs Azure storage | SQLAlchemy connection URL for prod (SQLite on Container Apps volume, or Postgres later) | Runtime | Infra provisioning; default `sqlite:////data/mom_bot.db` | When DB backend changes (e.g. migrate to Postgres at v1.x) |
+| `dev-app-insights-conn-string` | No — separate AI instances when Epic 1 ships | Azure Application Insights connection string for local dev (placeholder until Epic 1+) | Runtime | Azure portal — @cbeaulieu-gt | On workspace recreation; set to `PLACEHOLDER` until provisioned |
+| `prod-app-insights-conn-string` | No — separate AI instances when Epic 1 ships | Azure Application Insights connection string for prod (placeholder until Epic 1+) | Runtime | Azure portal — @cbeaulieu-gt | On workspace recreation; set to `PLACEHOLDER` until provisioned |
 
 ## Access matrix
 
