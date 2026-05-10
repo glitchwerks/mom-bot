@@ -4,11 +4,16 @@ Reads the runtime environment from ``MOM_BOT_ENV`` (``dev`` or ``prod``) and
 the Key Vault name from ``MOM_BOT_KEY_VAULT_NAME``, then provides
 :func:`load_secret` for fetching prefixed secrets at runtime.
 
-Dev/prod model (A++):
+Dev/prod model:
 - **Local dev** — developer's laptop; ``MOM_BOT_ENV=dev``; ``az login``
-  provides the credential that ``DefaultAzureCredential`` picks up.
+  provides the credential via ``AzureCliCredential``.
 - **Prod (Azure)** — Container App with ``mi-mom-bot`` user-assigned MI;
-  ``MOM_BOT_ENV=prod``; ``DefaultAzureCredential`` picks up the MI.
+  ``MOM_BOT_ENV=prod``; ``ManagedIdentityCredential`` authenticates via IMDS.
+
+``DefaultAzureCredential`` is intentionally avoided: on developer laptops it
+walks a 9-credential chain that times out 25 s on the IMDS endpoint before
+reaching ``az``, and the chain has shown to misroute under Key Vault's
+challenge-flow even when ``AzureCliCredential`` alone succeeds.
 
 Secret naming convention: ``<env>-<name>`` (e.g. ``dev-discord-token``).
 """
@@ -16,14 +21,11 @@ Secret naming convention: ``<env>-<name>`` (e.g. ``dev-discord-token``).
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
 
+from azure.core.credentials import TokenCredential
 from azure.core.exceptions import ResourceNotFoundError
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential, ManagedIdentityCredential
 from azure.keyvault.secrets import SecretClient
-
-if TYPE_CHECKING:
-    pass
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -79,20 +81,47 @@ class ConfigError(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _build_credential() -> TokenCredential:
+    """Build the right Azure credential for the current environment.
+
+    For ``MOM_BOT_ENV=prod``, returns :class:`~azure.identity.ManagedIdentityCredential`
+    — the Container App has a user-assigned managed identity (``mi-mom-bot``)
+    that already has *Key Vault Secrets User* on ``kv-mombot-eastus2``.
+
+    For ``MOM_BOT_ENV=dev`` (the default), returns
+    :class:`~azure.identity.AzureCliCredential` — the developer has
+    ``az login``'d locally and self-granted *Key Vault Secrets User* on the
+    same vault.
+
+    ``DefaultAzureCredential`` is deliberately avoided here:
+
+    - On laptops it walks a 9-credential chain that times out 25 s on the
+      IMDS endpoint before falling through to ``az``.
+    - The chain has shown to misroute under KV's challenge-flow even when
+      ``AzureCliCredential`` alone succeeds — so the chain itself is a flake
+      source.
+
+    Returns:
+        A :class:`~azure.core.credentials.TokenCredential` appropriate for the
+        current environment.
+    """
+    if _ENV == "prod":
+        return ManagedIdentityCredential()
+    return AzureCliCredential()
+
+
 def _get_secret_client() -> SecretClient:
     """Return a SecretClient for the configured Key Vault.
 
-    Uses ``DefaultAzureCredential``, which resolves the credential source in
-    order: environment variables → workload identity → managed identity →
-    Azure CLI (``az login``).  On developer laptops, ``az login`` suffices.
-    On Azure, the Container App's user-assigned MI (``mi-mom-bot``) is used.
+    Delegates credential selection to :func:`_build_credential`, which picks
+    ``AzureCliCredential`` for ``dev`` and ``ManagedIdentityCredential`` for
+    ``prod``.
 
     Returns:
         An authenticated :class:`azure.keyvault.secrets.SecretClient`.
     """
     vault_url = f"https://{_KEY_VAULT_NAME}.vault.azure.net/"
-    credential = DefaultAzureCredential()
-    return SecretClient(vault_url=vault_url, credential=credential)
+    return SecretClient(vault_url=vault_url, credential=_build_credential())
 
 
 # ---------------------------------------------------------------------------
