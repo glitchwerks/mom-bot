@@ -195,10 +195,10 @@ gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc
 
 ---
 
-## Step 7 — Grant yourself Key Vault access for local dev
+## Step 7 — Grant yourself Key Vault Secrets Officer for seeding
 
-Your own user account needs `Key Vault Secrets User` on the KV to read
-`dev-*` secrets locally via `az login` + `DefaultAzureCredential`.
+Your own user account needs `Key Vault Secrets Officer` on the KV to both
+read and write secrets — required for the secret-seeding calls in Step 8.
 
 ```powershell
 $MyObjectId = az ad signed-in-user show --query id -o tsv
@@ -207,11 +207,15 @@ $MyObjectId = az ad signed-in-user show --query id -o tsv
 $KvScope = az keyvault show --name kv-mombot-eastus2 --resource-group mom-bot --query id -o tsv
 
 az role assignment create `
-  --role "Key Vault Secrets User" `
+  --role "Key Vault Secrets Officer" `
   --assignee-object-id $MyObjectId `
   --assignee-principal-type User `
   --scope $KvScope
 ```
+
+> **Note**: `Key Vault Secrets Officer` includes write access (needed for Step 8's secret seeding). `Key Vault Secrets User` is read-only and would fail the secret-set call. If you only need to read secrets locally for dev (not seed/rotate), `User` is the lesser-privilege choice.
+>
+> RBAC propagation can take 5–10 minutes. If Step 8 fails with a permission error immediately after this step, wait 30–120 seconds and retry.
 
 ---
 
@@ -265,7 +269,12 @@ az keyvault secret set `
 
 ---
 
-## Step 9 — Run the deploy workflow
+## Step 9 — Run the deploy workflow (post-merge)
+
+This step runs **after PR #21 merges to `main`**. The `workflow_dispatch`
+trigger on `deploy.yml` fires from the repo's default branch only, so the
+deploy workflow file must already be on `main` before you can invoke it.
+Treat Step 9 as the first post-merge smoke test, not a pre-merge gate.
 
 Trigger the first deploy via GitHub Actions:
 
@@ -307,6 +316,7 @@ az deployment sub create `
 
 ## Summary checklist
 
+**Pre-merge (one-time provisioning):**
 - [ ] Step 1 — AAD app created; `$AppId` saved
 - [ ] Step 2 — Service principal created; `$SpObjectId` saved
 - [ ] Step 3a — Federated credential for `main` push created
@@ -314,6 +324,8 @@ az deployment sub create `
 - [ ] Step 4 — `$env:GHA_SP_OBJECT_ID` exported in session
 - [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)
 - [ ] Step 6 — Repo variables set in GitHub
-- [ ] Step 7 — Your user account has `Key Vault Secrets User`
+- [ ] Step 7 — Grant yourself Key Vault Secrets Officer for seeding
 - [ ] Step 8 — Initial secrets seeded
-- [ ] Step 9 — First `workflow_dispatch` run of `deploy.yml` succeeds
+
+**Post-merge (validation):**
+- [ ] Step 9 — Run the deploy workflow (`workflow_dispatch` on `deploy.yml` from `main`)
