@@ -9,7 +9,10 @@ Design notes
   the alembic tests already cover schema correctness; create_all is faster).
 - ``load_secret`` is patched to return canned snowflake values so no Key Vault
   round-trip occurs.
-- ``MomBot.wait_until_ready`` is patched to return immediately.
+- ``MomBot.wait_until_ready`` is patched to return immediately for most tests.
+  ``test_setup_hook_returns_promptly_without_gateway`` is the exception: it
+  intentionally does NOT mock ``wait_until_ready`` — this is the regression
+  test for #41 (setup_hook deadlock).
 - The scheduler task is observed via ``bot._reminder_task`` which must be set
   by the wireup so the task is not garbage-collected.
 - A ``FakeChannel`` with a recorded ``send`` is registered so we can verify
@@ -61,6 +64,74 @@ class FakeChannel:
 
 
 # ---------------------------------------------------------------------------
+# Test 0 — regression for #41: setup_hook must NOT await wait_until_ready
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_hook_returns_promptly_without_gateway() -> None:
+    """Regression for #41: setup_hook must return without awaiting READY.
+
+    Awaits ``setup_hook`` with a 2-second deadline via
+    :func:`asyncio.wait_for`.  If ``setup_hook`` awaits
+    ``wait_until_ready`` directly (the pre-fix bug), the gateway never
+    connects in test (no real discord.py session), ``wait_until_ready``
+    never resolves, and the test times out with
+    :exc:`asyncio.TimeoutError`.
+
+    ``wait_until_ready`` is intentionally NOT mocked here — that is the
+    whole point.  The scheduler task spawned by the fixed ``setup_hook``
+    WILL call ``wait_until_ready``; it will block forever inside that task,
+    which is expected and correct.  We cancel the task after asserting.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    engine = _make_engine()
+    session_factory = _make_session_factory(engine)
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-hydra-channel-id": str(_CHANNEL_ID),
+        "reminder-chimera-channel-id": str(_CHANNEL_ID),
+        "reminder-mention-role-id": str(_ROLE_ID),
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch("mom_bot.reminders.seed.load_secret", side_effect=fake_load_secret),
+        patch.object(bot.tree, "sync", new_callable=AsyncMock),
+        patch(
+            "mom_bot.main._build_session_factory",
+            return_value=session_factory,
+        ),
+    ):
+        # Real wait_until_ready — NOT mocked. If setup_hook awaits it
+        # directly the call will deadlock and hit the 2-second timeout.
+        await asyncio.wait_for(bot.setup_hook(), timeout=2.0)
+
+    # setup_hook returned — the fix is working.  The background task
+    # should have been created and should still be running (blocked on
+    # wait_until_ready internally, which is correct).
+    assert (
+        bot._reminder_task is not None
+    ), "setup_hook must store the reminder task on bot._reminder_task"
+    assert (
+        not bot._reminder_task.done()
+    ), "reminder task should still be running (awaiting READY in background)"
+
+    bot._reminder_task.cancel()
+    try:
+        await bot._reminder_task
+    except asyncio.CancelledError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Test 1 — setup_hook seeds two rows and starts the scheduler task
 # ---------------------------------------------------------------------------
 
@@ -104,6 +175,14 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
         ),
     ):
         await bot.setup_hook()
+
+        # After the fix, seed + scheduler-start happen inside
+        # _start_reminders_after_ready (a background task).  Yielding
+        # control here lets the task run while the patches are still
+        # active (wait_until_ready mock is needed for the task to
+        # proceed past its own await).
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
 
     # Assert seed ran: two rows in reminders.
     with Session(engine) as session:
