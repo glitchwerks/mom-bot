@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
-from typing import Optional
-
-from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
+import mom_bot.reminders.models  # noqa: F401 — registers Reminder + ReminderSent on Base.metadata
 from mom_bot.db import Base  # noqa: E402 — must follow alembic context setup
 
 # ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ target_metadata = Base.metadata
 # ---------------------------------------------------------------------------
 
 
-def _get_url() -> Optional[str]:
+def _get_url() -> str | None:
     """Return the database URL, preferring the env-var override.
 
     Returns:
