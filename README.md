@@ -99,6 +99,30 @@ MOM_BOT_ENV=dev python -m mom_bot
 additional environment variables required. See `docs/secrets-inventory.md` for
 the full list of secrets and their purposes.
 
+### Running the bot locally
+
+After `Local Azure Access` is set up and `dev-discord-token` + `dev-guild-id`
+are seeded in `kv-mombot-eastus2`:
+
+```powershell
+$env:MOM_BOT_ENV = "dev"
+.\.venv\Scripts\python.exe -m mom_bot
+```
+
+The bot connects, logs connection details, and registers `/ping` to the dev
+guild. Test it from the dev guild's chat — the response is ephemeral (only
+visible to you). Seed `dev-guild-id` via:
+
+```bash
+az keyvault secret set \
+  --vault-name kv-mombot-eastus2 \
+  --name dev-guild-id \
+  --value "<your-discord-server-id>"
+```
+
+Enable Discord Developer Mode (User Settings → Advanced → Developer Mode) to
+right-click the server icon and copy the guild ID.
+
 ## Database / Migrations
 
 Mom-bot uses [Alembic](https://alembic.sqlalchemy.org/) for schema migrations backed by SQLAlchemy.
@@ -133,7 +157,8 @@ mom-bot/
 ├── src/
 │   └── mom_bot/                   # Main package (src-layout)
 │       ├── __init__.py            # Package version
-│       ├── __main__.py            # `python -m mom_bot` entrypoint (placeholder)
+│       ├── __main__.py            # `python -m mom_bot` entrypoint
+│       ├── main.py                # Discord client, intents, /ping command
 │       └── db/
 │           └── __init__.py        # SQLAlchemy DeclarativeBase (Base)
 ├── migrations/                    # Alembic migration scripts

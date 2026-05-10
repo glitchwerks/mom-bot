@@ -23,6 +23,8 @@ All secrets follow the pattern `<env>-<name>`:
 | `prod-discord-token` | Discord bot OAuth token for production | Runtime | Discord Developer Portal — @cbeaulieu-gt | On compromise; otherwise never (token is tied to the app registration, not the user) |
 | `dev-database-url` | SQLAlchemy connection URL for local dev (SQLite file) | Runtime | Developer-set; default `sqlite:///./mom_bot_dev.db` | N/A (SQLite local path) |
 | `prod-database-url` | SQLAlchemy connection URL for prod (SQLite on Container Apps volume, or Postgres later) | Runtime | Infra provisioning; default `sqlite:////data/mom_bot.db` | When DB backend changes (e.g. migrate to Postgres at v1.x) |
+| `dev-guild-id` | Discord server (guild) ID for the dev guild — used to register guild-scoped slash commands instantly at startup | Runtime | Discord Developer Portal — enable Developer Mode, then right-click the server icon → Copy ID | Static — only changes when migrating to a new guild |
+| `prod-guild-id` | Discord server (guild) ID for the production guild — same purpose as `dev-guild-id` | Runtime | Discord Developer Portal — enable Developer Mode, then right-click the server icon → Copy ID | Static — only changes when migrating to a new guild |
 | `dev-app-insights-conn-string` | Azure Application Insights connection string for local dev (placeholder until Epic 1+) | Runtime | Azure portal — @cbeaulieu-gt | On workspace recreation; set to `PLACEHOLDER` until provisioned |
 | `prod-app-insights-conn-string` | Azure Application Insights connection string for prod (placeholder until Epic 1+) | Runtime | Azure portal — @cbeaulieu-gt | On workspace recreation; set to `PLACEHOLDER` until provisioned |
 

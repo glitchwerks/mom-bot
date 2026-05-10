@@ -1,14 +1,6 @@
-"""Entrypoint for `python -m mom_bot`.
+"""Entry point for ``python -m mom_bot``."""
 
-This module is a placeholder. The Discord client will be wired here
-in Epic 0.3 (issue #13).
-"""
-
-
-def main() -> None:
-    """Print a placeholder banner and exit cleanly."""
-    print("mom-bot starting up — Discord client not yet configured.")
-
+from mom_bot.main import main
 
 if __name__ == "__main__":
     main()
