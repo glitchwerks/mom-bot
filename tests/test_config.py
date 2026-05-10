@@ -155,3 +155,64 @@ def test_load_secret_caches_result(monkeypatch: pytest.MonkeyPatch) -> None:
     assert first == second == "tok-xyz"
     # SecretClient.get_secret must be called exactly once (cache hit on second call).
     mock_client.get_secret.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — MOM_BOT_ENV=dev yields AzureCliCredential
+# ---------------------------------------------------------------------------
+
+
+def test_dev_env_uses_azure_cli_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_build_credential() must return AzureCliCredential when MOM_BOT_ENV=dev.
+
+    On developer laptops, az login provides the token.  AzureCliCredential
+    targets the az CLI directly, bypassing DefaultAzureCredential's 9-step
+    chain (which times out 25 s on the IMDS endpoint before reaching az).
+    """
+    import importlib
+    import sys
+
+    from azure.identity import AzureCliCredential
+
+    monkeypatch.setenv("MOM_BOT_ENV", "dev")
+    sys.modules.pop("mom_bot.config", None)
+    import mom_bot.config as config_module
+
+    importlib.reload(config_module)
+
+    credential = config_module._build_credential()
+
+    assert isinstance(credential, AzureCliCredential)
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — MOM_BOT_ENV=prod yields ManagedIdentityCredential
+# ---------------------------------------------------------------------------
+
+
+def test_prod_env_uses_managed_identity_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_build_credential() must return ManagedIdentityCredential when MOM_BOT_ENV=prod.
+
+    In production the Container App has a user-assigned managed identity
+    (mi-mom-bot) with Key Vault Secrets User on kv-mombot-eastus2.
+    ManagedIdentityCredential uses the IMDS endpoint on the Container App
+    host where it is always reachable, avoiding the az CLI entirely.
+    """
+    import importlib
+    import sys
+
+    from azure.identity import ManagedIdentityCredential
+
+    monkeypatch.setenv("MOM_BOT_ENV", "prod")
+    sys.modules.pop("mom_bot.config", None)
+    import mom_bot.config as config_module
+
+    importlib.reload(config_module)
+
+    credential = config_module._build_credential()
+
+    assert isinstance(credential, ManagedIdentityCredential)
