@@ -10,10 +10,13 @@ The :func:`make_client` factory is intentionally separated from
 
 Scheduler wiring (plan § 6)
 ----------------------------
-:meth:`MomBot.setup_hook` awaits :meth:`discord.Client.wait_until_ready`
-before starting the reminder scheduler so that the gateway READY event has
-fired before any guild-touching call is made.  The scheduler task is stored
-on ``bot._reminder_task`` to prevent garbage collection.
+:meth:`MomBot.setup_hook` syncs slash commands and then spawns a task that
+awaits :meth:`discord.Client.wait_until_ready` before seeding reminders and
+starting the scheduler loop.  Awaiting ``wait_until_ready`` directly from
+``setup_hook`` would deadlock the bot (#41): discord.py calls ``setup_hook``
+before ``connect()``, and the READY event (which unblocks
+``wait_until_ready``) only fires after ``connect()`` runs.  The task is
+stored on ``bot._reminder_task`` to prevent garbage collection.
 
 Session factory
 ---------------
@@ -94,22 +97,20 @@ class MomBot(discord.Client):
         self._reminder_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
-        """Sync slash commands and wire the reminder scheduler.
+        """Sync slash commands and spawn the post-READY init task.
 
-        Called by discord.py before :meth:`on_ready`; this is the canonical
-        location for registering and syncing application commands.  After
-        syncing, this method awaits :meth:`~discord.Client.wait_until_ready`
-        and then:
+        Called by discord.py before the gateway connects (between login and
+        ``connect``).  Must return promptly so the gateway can connect and
+        the READY event can fire — awaiting
+        :meth:`~discord.Client.wait_until_ready` directly here would
+        deadlock the bot (see #41).
 
-        1. Seeds the reminder table via :func:`_maybe_seed_reminders` if it
-           is empty (plan § 4 seed-on-boot).
-        2. Starts the :class:`~mom_bot.reminders.scheduler.ReminderScheduler`
-           as an asyncio task and stores it on ``self._reminder_task`` to
-           prevent garbage collection (plan § 6).
+        The reminder-init logic that requires a connected gateway is spawned
+        as :meth:`_start_reminders_after_ready`, which awaits READY itself.
 
         Raises:
-            mom_bot.config.ConfigError: If ``guild-id`` or a required KV
-                secret is absent from Key Vault.
+            mom_bot.config.ConfigError: If ``guild-id`` is absent from Key
+                Vault.
             ValueError: If the stored guild-id cannot be cast to ``int``.
             discord.HTTPException: If the slash-command sync request fails.
         """
@@ -119,21 +120,36 @@ class MomBot(discord.Client):
         await self.tree.sync(guild=self.guild)
         _logger.info("Synced slash commands to guild %s", guild_id)
 
-        # Gate on READY before any guild-touching scheduler work (plan § 6).
+        # Reminder init must happen AFTER gateway READY but cannot be
+        # awaited here (would deadlock — see #41).  Spawn as a task and
+        # return so discord.py can proceed to connect().
+        self._reminder_task = asyncio.create_task(
+            self._start_reminders_after_ready(),
+            name="reminder-init",
+        )
+
+    async def _start_reminders_after_ready(self) -> None:
+        """Wait for gateway READY, then seed and run the scheduler loop.
+
+        Spawned as a background task by :meth:`setup_hook`.  Lives for the
+        bot's lifetime — the trailing ``await scheduler.run()`` is the main
+        scheduler loop, not just an init step.
+
+        Raises:
+            mom_bot.config.ConfigError: If a required KV secret is absent.
+        """
         await self.wait_until_ready()
 
-        # Build the session factory (patchable in tests via the module-level
-        # _build_session_factory function).
         factory = _build_session_factory()
 
         # Seed the reminder table on first boot from Key Vault (plan § 4).
         with factory() as session:
             _maybe_seed_reminders(session)
 
-        # Start the scheduler loop; store the task to prevent GC (plan § 6).
+        # Run the scheduler loop for the bot's lifetime (plan § 6).
         scheduler = ReminderScheduler(self, factory)
-        self._reminder_task = asyncio.create_task(scheduler.run(), name="reminder-scheduler")
         _logger.info("Reminder scheduler started")
+        await scheduler.run()
 
     async def on_ready(self) -> None:
         """Log connection details once the client is fully connected.
