@@ -21,8 +21,7 @@ from mom_bot.reminders.seed import _maybe_seed_reminders
 # Fixtures
 # ---------------------------------------------------------------------------
 
-_HYDRA_CHANNEL = "123456789012345678"
-_CHIMERA_CHANNEL = "234567890123456789"
+_CHANNEL = "123456789012345678"
 _MENTION_ROLE = "345678901234567890"
 
 
@@ -38,8 +37,7 @@ def session() -> Session:
 def _secret_side_effect(name: str) -> str:
     """Return a fake snowflake for each expected secret name."""
     secrets = {
-        "reminder-hydra-channel-id": _HYDRA_CHANNEL,
-        "reminder-chimera-channel-id": _CHIMERA_CHANNEL,
+        "reminder-channel-id": _CHANNEL,
         "reminder-mention-role-id": _MENTION_ROLE,
     }
     if name not in secrets:
@@ -55,6 +53,7 @@ def _secret_side_effect(name: str) -> str:
 def test_seed_empty_table_inserts_hydra_and_chimera(session: Session) -> None:
     """Empty reminders table + valid KV secrets → two rows inserted.
 
+    Both rows share the same channel_id (sourced from ``reminder-channel-id``).
     Hydra: weekday=1, fire_time=07:00:00.
     Chimera: weekday=2, fire_time=12:00:00.
     """
@@ -70,14 +69,17 @@ def test_seed_empty_table_inserts_hydra_and_chimera(session: Session) -> None:
     hydra = session.execute(select(Reminder).where(Reminder.name == "Hydra")).scalar_one()
     assert hydra.weekday == 1
     assert hydra.fire_time_utc == datetime.time(7, 0, 0)
-    assert hydra.channel_id == int(_HYDRA_CHANNEL)
+    assert hydra.channel_id == int(_CHANNEL)
     assert hydra.role_mention_id == int(_MENTION_ROLE)
 
     chimera = session.execute(select(Reminder).where(Reminder.name == "Chimera")).scalar_one()
     assert chimera.weekday == 2
     assert chimera.fire_time_utc == datetime.time(12, 0, 0)
-    assert chimera.channel_id == int(_CHIMERA_CHANNEL)
+    assert chimera.channel_id == int(_CHANNEL)
     assert chimera.role_mention_id == int(_MENTION_ROLE)
+
+    # Both rows share the single channel secret — verify equality explicitly.
+    assert hydra.channel_id == chimera.channel_id
 
 
 def test_seed_non_empty_table_is_noop(session: Session) -> None:

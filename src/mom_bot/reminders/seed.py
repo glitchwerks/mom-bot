@@ -59,15 +59,19 @@ CHIMERA_TEMPLATE: str = (
 def _maybe_seed_reminders(session: Session) -> None:
     """Insert Hydra + Chimera reminder rows if the table is empty.
 
-    Reads three Key Vault secrets via :func:`~mom_bot.config.load_secret`
+    Reads two Key Vault secrets via :func:`~mom_bot.config.load_secret`
     (which applies the ``MOM_BOT_ENV`` prefix automatically):
 
-    - ``reminder-hydra-channel-id`` — Discord channel snowflake for Hydra.
-    - ``reminder-chimera-channel-id`` — Discord channel snowflake for Chimera.
+    - ``reminder-channel-id`` — Discord channel snowflake used for both
+      Hydra and Chimera reminders (both fire to the same channel per env).
     - ``reminder-mention-role-id`` — Discord role snowflake to mention.
 
-    Both Hydra and Chimera share the single mention-role today (matching the
-    source bot's ``Member`` default at ``clan_reminders.py:L107``).
+    Both Hydra and Chimera share the single channel and mention-role today
+    (matching the source bot's ``Member`` default at
+    ``clan_reminders.py:L107``).  If a future need arises to split channels,
+    either add per-reminder secrets and update this function, or
+    ``UPDATE reminders SET channel_id = ... WHERE name = 'Chimera'``
+    directly without re-seeding.
 
     Schedule:
 
@@ -93,8 +97,7 @@ def _maybe_seed_reminders(session: Session) -> None:
     _logger.info("_maybe_seed_reminders: table empty; seeding Hydra + Chimera")
 
     try:
-        hydra_channel = int(load_secret("reminder-hydra-channel-id"))
-        chimera_channel = int(load_secret("reminder-chimera-channel-id"))
+        channel = int(load_secret("reminder-channel-id"))
         mention_role = int(load_secret("reminder-mention-role-id"))
     except Exception as exc:
         secret_name = getattr(exc, "secret_name", "reminder-*")
@@ -110,7 +113,7 @@ def _maybe_seed_reminders(session: Session) -> None:
         [
             Reminder(
                 name="Hydra",
-                channel_id=hydra_channel,
+                channel_id=channel,
                 weekday=1,
                 fire_time_utc=datetime.time(7, 0, 0),
                 message_template=HYDRA_TEMPLATE,
@@ -118,7 +121,7 @@ def _maybe_seed_reminders(session: Session) -> None:
             ),
             Reminder(
                 name="Chimera",
-                channel_id=chimera_channel,
+                channel_id=channel,
                 weekday=2,
                 fire_time_utc=datetime.time(12, 0, 0),
                 message_template=CHIMERA_TEMPLATE,
@@ -128,8 +131,7 @@ def _maybe_seed_reminders(session: Session) -> None:
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra (channel=%d) " "and Chimera (channel=%d) with role=%d",
-        hydra_channel,
-        chimera_channel,
+        "_maybe_seed_reminders: seeded Hydra and Chimera (channel=%d) with role=%d",
+        channel,
         mention_role,
     )

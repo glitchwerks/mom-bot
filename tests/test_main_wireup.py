@@ -91,8 +91,7 @@ async def test_setup_hook_returns_promptly_without_gateway() -> None:
 
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
-        "reminder-hydra-channel-id": str(_CHANNEL_ID),
-        "reminder-chimera-channel-id": str(_CHANNEL_ID),
+        "reminder-channel-id": str(_CHANNEL_ID),
         "reminder-mention-role-id": str(_ROLE_ID),
     }
 
@@ -152,8 +151,7 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
 
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
-        "reminder-hydra-channel-id": str(_CHANNEL_ID),
-        "reminder-chimera-channel-id": str(_CHANNEL_ID),
+        "reminder-channel-id": str(_CHANNEL_ID),
         "reminder-mention-role-id": str(_ROLE_ID),
     }
 
@@ -261,8 +259,7 @@ async def test_scheduler_fires_custom_reminder() -> None:
 
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
-        "reminder-hydra-channel-id": str(_CHANNEL_ID),
-        "reminder-chimera-channel-id": str(_CHANNEL_ID),
+        "reminder-channel-id": str(_CHANNEL_ID),
         "reminder-mention-role-id": str(_ROLE_ID),
     }
 

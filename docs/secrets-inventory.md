@@ -52,22 +52,45 @@ KV secrets, because they are non-sensitive OIDC identifiers):
 | `AZURE_TENANT_ID` | `48bca6c3-6d4f-4884-bc1a-648ae2362a32` |
 | `AZURE_SUBSCRIPTION_ID` | `213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0` |
 
-## Reminder scheduler secrets (added in #29)
+## Reminder scheduler secrets (added in #29, collapsed in #43)
 
-The following six secrets are read by `_maybe_seed_reminders`
+The following four secrets are read by `_maybe_seed_reminders`
 (`src/mom_bot/reminders/seed.py`) on first boot if the `reminders` table is
 empty. They must be populated in both `kv-mom-bot-dev` and `kv-mom-bot-prod`
 **before** deploying the bot for the first time; the bot exits with CRITICAL if
 any of these is missing.
 
+Both Hydra and Chimera reminders fire to the **same channel per env** — a
+single `reminder-channel-id` secret replaces the previous per-reminder
+`reminder-hydra-channel-id` / `reminder-chimera-channel-id` pair (#43).
+The `reminders` table schema is unchanged (`channel_id` remains per-row); a
+future operator can `UPDATE reminders SET channel_id = ... WHERE name =
+'Chimera'` to split channels without touching `seed.py`.
+
 | Secret name (in KV) | Same in dev/prod? | Purpose | Class | Source / owner | Rotation cadence |
 |---|---|---|---|---|---|
-| `dev-reminder-hydra-channel-id` | No (different guilds) | Discord channel snowflake where the Hydra reminder fires (Tuesday 07:00 UTC) — dev guild | Runtime | Discord Developer Portal — enable Developer Mode, right-click the channel → Copy ID | Static; only changes if the channel is moved or recreated |
-| `prod-reminder-hydra-channel-id` | No (different guilds) | Discord channel snowflake where the Hydra reminder fires (Tuesday 07:00 UTC) — prod guild | Runtime | Discord Developer Portal — same method as dev | Static |
-| `dev-reminder-chimera-channel-id` | No (different guilds) | Discord channel snowflake where the Chimera reminder fires (Wednesday 12:00 UTC) — dev guild | Runtime | Discord Developer Portal | Static |
-| `prod-reminder-chimera-channel-id` | No (different guilds) | Discord channel snowflake where the Chimera reminder fires (Wednesday 12:00 UTC) — prod guild | Runtime | Discord Developer Portal | Static |
+| `dev-reminder-channel-id` | No (different guilds) | Discord channel snowflake where both Hydra and Chimera reminders fire — dev guild | Runtime | Discord Developer Portal — enable Developer Mode, right-click the channel → Copy ID | Static; only changes if the channel is moved or recreated |
+| `prod-reminder-channel-id` | No (different guilds) | Discord channel snowflake where both Hydra and Chimera reminders fire — prod guild | Runtime | Discord Developer Portal — same method as dev | Static |
 | `dev-reminder-mention-role-id` | No (different guilds) | Discord role snowflake to mention at fire time (the `Member` role equivalent in the dev guild) | Runtime | Discord Developer Portal — enable Developer Mode, right-click the role → Copy ID | Static; update if the role is recreated |
 | `prod-reminder-mention-role-id` | No (different guilds) | Discord role snowflake to mention at fire time (the `Member` role equivalent in the prod guild) | Runtime | Discord Developer Portal | Static |
+
+### Migration from per-reminder channel secrets (#43)
+
+If you previously seeded `*-reminder-{hydra,chimera}-channel-id` (the old
+two-secret layout), follow these steps before deploying the #43 code:
+
+1. Copy either old value (both should be the same channel) into the new
+   consolidated secret: `az keyvault secret set --vault-name kv-mombot-eastus2
+   --name <env>-reminder-channel-id --value <channel-id>`. Repeat for both
+   `dev-` and `prod-`.
+2. Deploy the updated bot and verify it boots cleanly — `_maybe_seed_reminders`
+   will read the new secret name.
+3. After confirming a clean boot, delete the old secrets:
+   `az keyvault secret delete --vault-name kv-mombot-eastus2 --name <env>-reminder-hydra-channel-id`
+   and the same for `<env>-reminder-chimera-channel-id`.
+
+New installs (no prior seeding) can skip this section and go straight to
+Step 8 of `infra/aad-runbook.md`.
 
 ## Open question
 

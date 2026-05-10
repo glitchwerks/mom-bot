@@ -285,6 +285,31 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-app-insights-co
 az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-app-insights-conn-string --value "PLACEHOLDER" | Out-Null
 ```
 
+### Reminder scheduler secrets — shared channel per environment
+
+Both the Hydra and Chimera reminders fire to the **same channel** in each
+environment (collapsed from two per-reminder secrets in #43). Enable Discord
+Developer Mode (User Settings → Advanced → Developer Mode), then right-click
+the target channel → "Copy ID" and the relevant `Member` role → "Copy ID".
+
+```powershell
+$devReminderChannelId  = Read-Host "Paste DEV reminder channel ID"
+$prodReminderChannelId = Read-Host "Paste PROD reminder channel ID"
+
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-reminder-channel-id  --value $devReminderChannelId  | Out-Null
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-reminder-channel-id --value $prodReminderChannelId | Out-Null
+
+$devReminderMentionRoleId  = Read-Host "Paste DEV reminder mention role ID"
+$prodReminderMentionRoleId = Read-Host "Paste PROD reminder mention role ID"
+
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-reminder-mention-role-id  --value $devReminderMentionRoleId  | Out-Null
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-reminder-mention-role-id --value $prodReminderMentionRoleId | Out-Null
+```
+
+> **Note**: If you previously seeded `*-reminder-{hydra,chimera}-channel-id`
+> secrets, see the migration note in `docs/secrets-inventory.md` before running
+> these commands.
+
 ### Verify all expected secrets exist
 
 ```powershell
@@ -297,6 +322,8 @@ You should see, at minimum:
 - `dev-guild-id`, `prod-guild-id`
 - `dev-database-url`, `prod-database-url`
 - `dev-app-insights-conn-string`, `prod-app-insights-conn-string`
+- `dev-reminder-channel-id`, `prod-reminder-channel-id`
+- `dev-reminder-mention-role-id`, `prod-reminder-mention-role-id`
 
 ### When to split into two bot applications
 
