@@ -56,24 +56,52 @@ _cache: dict[str, str] = {}
 
 
 class ConfigError(Exception):
-    """Raised when a required secret cannot be loaded from Key Vault.
+    """Configuration failure — KV secret missing/empty, or other config-state issue.
+
+    Raised when a required secret cannot be loaded from Key Vault, or when
+    Discord client state prevents configuration from completing (e.g. no
+    guilds at seed time, channel not found).
 
     Attributes:
-        secret_name: The fully-qualified KV secret name that was missing.
+        secret_name: Name of the KV secret involved, or ``None`` for
+            non-KV failures (e.g. Discord client state errors).
     """
 
-    def __init__(self, secret_name: str) -> None:
+    def __init__(
+        self,
+        secret_name: str | None = None,
+        message: str | None = None,
+    ) -> None:
         """Initialise ConfigError.
+
+        Exactly one of ``secret_name`` or ``message`` must be provided.
 
         Args:
             secret_name: The Key Vault secret name that was not found.
+                When provided, a standard KV-error message is generated.
+            message: A custom error message for non-KV config failures
+                (e.g. Discord client state errors).
+
+        Raises:
+            ValueError: If both ``secret_name`` and ``message`` are
+                supplied (ambiguous — exactly one is required).
+            ValueError: If neither ``secret_name`` nor ``message`` is
+                supplied.
         """
+        if secret_name is not None and message is not None:
+            raise ValueError("ConfigError requires exactly one of secret_name or message, not both")
         self.secret_name = secret_name
-        super().__init__(
-            f"Required secret {secret_name!r} not found in Key Vault "
-            f"{_KEY_VAULT_NAME!r}. "
-            "Ensure the secret exists and the identity has Key Vault Secrets User."
-        )
+        if message is not None:
+            super().__init__(message)
+        elif secret_name is not None:
+            super().__init__(
+                f"Required secret {secret_name!r} not found in Key Vault "
+                f"{_KEY_VAULT_NAME!r}. "
+                "Ensure the secret exists and the identity has "
+                "Key Vault Secrets User."
+            )
+        else:
+            raise ValueError("ConfigError requires either secret_name or message")
 
 
 # ---------------------------------------------------------------------------

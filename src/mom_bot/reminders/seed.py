@@ -15,6 +15,17 @@ Design constraints (locked, plan § 3 row 13):
   terminates.  Container Apps will restart the pod, which retries KV on
   the next boot.  The bot must never start ticking with an empty table.
 
+Channel resolution (#47):
+
+- The KV secret ``reminder-channel-name`` stores the channel name as a
+  plain string (e.g. ``"reminders"``).
+- At first boot, the function resolves that name to a snowflake via
+  ``discord.utils.get(bot.guilds[0].text_channels, name=channel_name)``.
+- The resolved snowflake is stored in the ``channel_id`` DB column.
+- The resolution happens once — channel renames after the first successful
+  seed require a manual SQL UPDATE:
+  ``UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'``
+
 Message templates are verbatim copies from ``clan_reminders.py:L128-L132``
 (Hydra) and ``L141-L145`` (Chimera) per the plan's pre-work checklist.
 
@@ -33,10 +44,11 @@ from __future__ import annotations
 import datetime
 import logging
 
+import discord
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from mom_bot.config import load_secret
+from mom_bot.config import ConfigError, load_secret
 from mom_bot.reminders.models import Reminder
 
 __all__ = ["_maybe_seed_reminders"]
@@ -65,14 +77,25 @@ CHIMERA_TEMPLATE: str = (
 # ---------------------------------------------------------------------------
 
 
-def _maybe_seed_reminders(session: Session) -> None:
+def _maybe_seed_reminders(
+    session: Session,
+    bot: discord.Client,
+) -> None:
     """Insert Hydra + Chimera reminder rows if the table is empty.
 
     Reads one Key Vault secret via :func:`~mom_bot.config.load_secret`
     (which applies the ``MOM_BOT_ENV`` prefix automatically):
 
-    - ``reminder-channel-id`` — Discord channel snowflake used for both
-      Hydra and Chimera reminders (both fire to the same channel per env).
+    - ``reminder-channel-name`` — Discord channel name (string) used for
+      both Hydra and Chimera reminders.  Resolved to a snowflake at first
+      boot via the connected discord.py client.  Both reminders fire to the
+      same channel per env.
+
+    Channel resolution uses ``discord.utils.get(bot.guilds[0].text_channels,
+    name=channel_name)``.  The resolved snowflake is written into the
+    ``channel_id`` DB column.  If the channel is renamed after first seed,
+    use ``UPDATE reminders SET channel_id = <new-snowflake> WHERE name =
+    '<X>'`` directly without re-seeding.
 
     Both Hydra and Chimera seed with ``role_mention_id=None`` — reminders
     post to the channel without pinging any role (#45).  If a future need
@@ -88,10 +111,16 @@ def _maybe_seed_reminders(session: Session) -> None:
     Args:
         session: An open :class:`~sqlalchemy.orm.Session` with write access
             to the ``reminders`` table.
+        bot: The connected :class:`discord.Client` instance.  Must have
+            already received the READY event so that ``bot.guilds`` is
+            populated.  Used to resolve the channel name to a snowflake.
 
     Raises:
-        Exception: Any exception raised by :func:`~mom_bot.config.load_secret`
-            is logged at CRITICAL and re-raised so the process exits.
+        ConfigError: If the KV secret is missing, if the bot has no guilds,
+            or if the named channel does not exist in the guild.
+        Exception: Any other exception raised by
+            :func:`~mom_bot.config.load_secret` is logged at CRITICAL and
+            re-raised so the process exits.
     """
     count = session.scalar(select(func.count(Reminder.id)))
     if count != 0:
@@ -104,9 +133,9 @@ def _maybe_seed_reminders(session: Session) -> None:
     _logger.info("_maybe_seed_reminders: table empty; seeding Hydra + Chimera")
 
     try:
-        channel = int(load_secret("reminder-channel-id"))
+        channel_name = load_secret("reminder-channel-name")
     except Exception as exc:
-        secret_name = getattr(exc, "secret_name", "reminder-*")
+        secret_name = getattr(exc, "secret_name", "reminder-channel-name")
         _logger.critical(
             "_maybe_seed_reminders: failed to load KV secret %r — "
             "bot cannot seed reminders; exiting. Error: %s",
@@ -115,11 +144,35 @@ def _maybe_seed_reminders(session: Session) -> None:
         )
         raise
 
+    if not bot.guilds:
+        _logger.critical(
+            "_maybe_seed_reminders: bot has no guilds; gateway READY did not populate the cache"
+        )
+        raise ConfigError(message="Bot has no guilds at seed time — gateway READY ordering bug?")
+
+    # Single-guild deployments (dev/prod) — bot is invited to exactly one
+    # guild per env.  Multi-guild support is out of scope for v1.0; this
+    # becomes the place to add guild-selection logic if/when needed.
+    guild = bot.guilds[0]
+    channel = discord.utils.get(guild.text_channels, name=channel_name)
+    if channel is None:
+        _logger.critical(
+            "_maybe_seed_reminders: channel %r not found in guild %r (id=%d)",
+            channel_name,
+            guild.name,
+            guild.id,
+        )
+        raise ConfigError(
+            message=f"Reminder channel '{channel_name}' not found in guild '{guild.name}'"
+        )
+
+    channel_id: int = channel.id
+
     session.add_all(
         [
             Reminder(
                 name="Hydra",
-                channel_id=channel,
+                channel_id=channel_id,
                 weekday=1,
                 fire_time_utc=datetime.time(7, 0, 0),
                 message_template=HYDRA_TEMPLATE,
@@ -127,7 +180,7 @@ def _maybe_seed_reminders(session: Session) -> None:
             ),
             Reminder(
                 name="Chimera",
-                channel_id=channel,
+                channel_id=channel_id,
                 weekday=2,
                 fire_time_utc=datetime.time(12, 0, 0),
                 message_template=CHIMERA_TEMPLATE,
@@ -137,6 +190,7 @@ def _maybe_seed_reminders(session: Session) -> None:
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra and Chimera" " (channel=%d, no role mention)",
-        channel,
+        "_maybe_seed_reminders: seeded Hydra and Chimera (channel=%r → id=%d, no role mention)",
+        channel_name,
+        channel_id,
     )

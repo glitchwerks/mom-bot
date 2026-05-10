@@ -52,7 +52,7 @@ KV secrets, because they are non-sensitive OIDC identifiers):
 | `AZURE_TENANT_ID` | `48bca6c3-6d4f-4884-bc1a-648ae2362a32` |
 | `AZURE_SUBSCRIPTION_ID` | `213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0` |
 
-## Reminder scheduler secrets (added in #29, collapsed in #43, role dropped in #45)
+## Reminder scheduler secrets (added in #29, collapsed in #43, role dropped in #45, name-not-snowflake in #47)
 
 The following secret is read by `_maybe_seed_reminders`
 (`src/mom_bot/reminders/seed.py`) on first boot if the `reminders` table is
@@ -60,41 +60,79 @@ empty. It must be populated in both `kv-mom-bot-dev` and `kv-mom-bot-prod`
 **before** deploying the bot for the first time; the bot exits with CRITICAL if
 it is missing.
 
+> **Warning — channel renames require a manual SQL UPDATE.**
+> The channel name is resolved to a snowflake once at first boot and stored in
+> the `channel_id` DB column. If the Discord channel is renamed after the initial
+> seed, `seed.py` will not re-run (the table is non-empty) and the stored
+> snowflake remains valid — the channel still exists, only its name changed.
+> However, if you ever clear the DB and reseed, the new name must already be in
+> KV. To update the stored snowflake without reseeding, run:
+> `UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'`
+
 Both Hydra and Chimera reminders fire to the **same channel per env** — a
-single `reminder-channel-id` secret replaces the previous per-reminder
+single `reminder-channel-name` secret replaces the previous per-reminder
 `reminder-hydra-channel-id` / `reminder-chimera-channel-id` pair (#43).
 The `role_mention_id` column stays nullable in the schema but both seeded rows
 have `NULL` — reminders post without pinging any role (#45). A future operator
 can `UPDATE reminders SET role_mention_id = <snowflake> WHERE name = '<X>'`
 to re-add a ping for a specific reminder without touching `seed.py`.
 
-| Secret name (in KV) | Same in dev/prod? | Purpose | Class | Source / owner | Rotation cadence |
-|---|---|---|---|---|---|
-| `dev-reminder-channel-id` | No (different guilds) | Discord channel snowflake where both Hydra and Chimera reminders fire — dev guild | Runtime | Discord Developer Portal — enable Developer Mode, right-click the channel → Copy ID | Static; only changes if the channel is moved or recreated |
-| `prod-reminder-channel-id` | No (different guilds) | Discord channel snowflake where both Hydra and Chimera reminders fire — prod guild | Runtime | Discord Developer Portal — same method as dev | Static |
+The secret value is the **channel name** (plain string, e.g. `"reminders"`),
+not a snowflake integer (#47). `seed.py` resolves the name to a snowflake at
+first boot using the connected discord.py client
+(`discord.utils.get(bot.guilds[0].text_channels, name=channel_name)`). The
+resolved snowflake is stored in the `channel_id` DB column. The `channel_id`
+column schema is unchanged (still an integer). If the channel is renamed after
+the first successful seed, update with SQL:
+`UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'`
 
-### Migration from per-reminder channel secrets (#43) and role-mention secret (#45)
+| Secret name (in KV) | Same in dev/prod? | Purpose | Type | Source / owner | Rotation cadence |
+|---|---|---|---|---|---|
+| `dev-reminder-channel-name` | No (different guilds) | Discord channel name where both Hydra and Chimera reminders fire — dev guild | String (e.g. `"reminders"`) | The channel name as shown in Discord — no Developer Mode required | Static; only changes if the channel is renamed (update KV + SQL) |
+| `prod-reminder-channel-name` | No (different guilds) | Discord channel name where both Hydra and Chimera reminders fire — prod guild | String (e.g. `"reminders"`) | The channel name as shown in Discord — no Developer Mode required | Static |
+
+### Migration history
+
+#### From per-reminder channel secrets → consolidated secret (#43)
 
 If you previously seeded `*-reminder-{hydra,chimera}-channel-id` (the old
 two-secret layout from before #43), follow these steps before deploying the
 #43 code:
 
-1. Copy either old value (both should be the same channel) into the new
-   consolidated secret: `az keyvault secret set --vault-name kv-mombot-eastus2
+1. Copy either old value (both should be the same channel snowflake) into the
+   new consolidated secret: `az keyvault secret set --vault-name kv-mombot-eastus2
    --name <env>-reminder-channel-id --value <channel-id>`. Repeat for both
    `dev-` and `prod-`.
-2. Deploy the updated bot and verify it boots cleanly — `_maybe_seed_reminders`
-   will read the new secret name.
+2. Deploy the updated bot and verify it boots cleanly.
 3. After confirming a clean boot, delete the old secrets:
    `az keyvault secret delete --vault-name kv-mombot-eastus2 --name <env>-reminder-hydra-channel-id`
    and the same for `<env>-reminder-chimera-channel-id`.
+
+#### Role-mention secret removed (#45)
 
 If you previously seeded `*-reminder-mention-role-id` (added in #44, removed
 in #45), those secrets are now unused. Delete them at your convenience:
 `az keyvault secret delete --vault-name kv-mombot-eastus2 --name dev-reminder-mention-role-id`
 and the same for `prod-reminder-mention-role-id`.
 
-New installs (no prior seeding) need only `reminder-channel-id` per env.
+#### From snowflake → channel name (#47)
+
+If you previously seeded `*-reminder-channel-id` with a snowflake integer
+(the format used from #43 through #46), replace it with the channel name
+string:
+
+```powershell
+# Replace the snowflake secret with the channel name.
+# No Developer Mode or right-click required — just type the channel name.
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-reminder-channel-name --value "reminders"
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-reminder-channel-name --value "reminders"
+
+# Delete the old snowflake secret (no longer read by seed.py).
+az keyvault secret delete --vault-name kv-mombot-eastus2 --name dev-reminder-channel-id
+az keyvault secret delete --vault-name kv-mombot-eastus2 --name prod-reminder-channel-id
+```
+
+New installs (no prior seeding) need only `reminder-channel-name` per env.
 Go straight to Step 8 of `infra/aad-runbook.md`.
 
 ## Open question

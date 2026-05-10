@@ -216,3 +216,39 @@ def test_prod_env_uses_managed_identity_credential(
     credential = config_module._build_credential()
 
     assert isinstance(credential, ManagedIdentityCredential)
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — ConfigError rejects both secret_name and message
+# ---------------------------------------------------------------------------
+
+
+def test_config_error_rejects_both_secret_name_and_message() -> None:
+    """ConfigError contract: exactly one of secret_name or message, not both.
+
+    Passing both arguments is ambiguous — ``message`` would silently win while
+    ``secret_name`` is ignored.  The constructor must raise ``ValueError``
+    immediately so callers cannot accidentally construct a misleading error.
+    """
+    from mom_bot.config import ConfigError
+
+    with pytest.raises(ValueError, match="exactly one"):
+        ConfigError(secret_name="foo", message="bar")
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — ConfigError rejects no arguments
+# ---------------------------------------------------------------------------
+
+
+def test_config_error_rejects_no_arguments() -> None:
+    """ConfigError contract: at least one of secret_name or message is required.
+
+    Calling ``ConfigError()`` with no arguments would produce a meaningless
+    exception with no diagnostic information.  The constructor must raise
+    ``ValueError`` to surface the programming error early.
+    """
+    from mom_bot.config import ConfigError
+
+    with pytest.raises(ValueError, match="either secret_name or message"):
+        ConfigError()
