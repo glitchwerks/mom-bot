@@ -17,6 +17,15 @@ Design constraints (locked, plan § 3 row 13):
 
 Message templates are verbatim copies from ``clan_reminders.py:L128-L132``
 (Hydra) and ``L141-L145`` (Chimera) per the plan's pre-work checklist.
+
+.. note::
+
+    ``role_mention_id`` is intentionally ``None`` for both seeded rows
+    (#45). Reminders post to a dedicated channel and do not ping any role —
+    the channel itself is the audience signal.  If a future need arises to
+    re-add a mention for a specific reminder, use
+    ``UPDATE reminders SET role_mention_id = <snowflake> WHERE name = '<X>'``
+    without touching this function.
 """
 
 from __future__ import annotations
@@ -59,19 +68,17 @@ CHIMERA_TEMPLATE: str = (
 def _maybe_seed_reminders(session: Session) -> None:
     """Insert Hydra + Chimera reminder rows if the table is empty.
 
-    Reads two Key Vault secrets via :func:`~mom_bot.config.load_secret`
+    Reads one Key Vault secret via :func:`~mom_bot.config.load_secret`
     (which applies the ``MOM_BOT_ENV`` prefix automatically):
 
     - ``reminder-channel-id`` — Discord channel snowflake used for both
       Hydra and Chimera reminders (both fire to the same channel per env).
-    - ``reminder-mention-role-id`` — Discord role snowflake to mention.
 
-    Both Hydra and Chimera share the single channel and mention-role today
-    (matching the source bot's ``Member`` default at
-    ``clan_reminders.py:L107``).  If a future need arises to split channels,
-    either add per-reminder secrets and update this function, or
-    ``UPDATE reminders SET channel_id = ... WHERE name = 'Chimera'``
-    directly without re-seeding.
+    Both Hydra and Chimera seed with ``role_mention_id=None`` — reminders
+    post to the channel without pinging any role (#45).  If a future need
+    arises to split channels, either add per-reminder secrets and update this
+    function, or ``UPDATE reminders SET channel_id = ... WHERE name =
+    'Chimera'`` directly without re-seeding.
 
     Schedule:
 
@@ -98,7 +105,6 @@ def _maybe_seed_reminders(session: Session) -> None:
 
     try:
         channel = int(load_secret("reminder-channel-id"))
-        mention_role = int(load_secret("reminder-mention-role-id"))
     except Exception as exc:
         secret_name = getattr(exc, "secret_name", "reminder-*")
         _logger.critical(
@@ -117,7 +123,7 @@ def _maybe_seed_reminders(session: Session) -> None:
                 weekday=1,
                 fire_time_utc=datetime.time(7, 0, 0),
                 message_template=HYDRA_TEMPLATE,
-                role_mention_id=mention_role,
+                role_mention_id=None,
             ),
             Reminder(
                 name="Chimera",
@@ -125,13 +131,12 @@ def _maybe_seed_reminders(session: Session) -> None:
                 weekday=2,
                 fire_time_utc=datetime.time(12, 0, 0),
                 message_template=CHIMERA_TEMPLATE,
-                role_mention_id=mention_role,
+                role_mention_id=None,
             ),
         ]
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra and Chimera (channel=%d) with role=%d",
+        "_maybe_seed_reminders: seeded Hydra and Chimera" " (channel=%d, no role mention)",
         channel,
-        mention_role,
     )

@@ -752,6 +752,52 @@ async def test_fire_time_predicate_only_fires_eligible() -> None:
 
 
 # ---------------------------------------------------------------------------
+# NULL role_mention_id — no ping prefix (scheduler.py:L243-L244)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_null_role_mention_id_sends_bare_message() -> None:
+    """Reminder with role_mention_id=None sends message without <@& prefix.
+
+    Exercises the scheduler.py:L243-L244 NULL-check branch introduced in
+    #28 and made the default by #45.  When ``role_mention_id`` is ``None``
+    the scheduler must deliver the bare ``message_template`` string without
+    prepending a role mention.
+    """
+    engine = _make_engine()
+    with Session(engine) as s:
+        _seed_reminder(
+            s,
+            weekday=_TUESDAY_0700.weekday(),
+            role_mention_id=None,
+            name="NoMention",
+        )
+
+    channel = FakeChannel(_CHANNEL_ID)
+    bot = FakeBot(ready=True)
+    bot.add_channel(channel)
+    scheduler = _make_scheduler(bot, engine, tick_seconds=0.05)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.08)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    channel.send.assert_called_once()
+    sent_message: str = channel.send.call_args.args[0]
+    assert "<@&" not in sent_message, (
+        "Expected no role-mention prefix when role_mention_id is None, "
+        f"but got: {sent_message!r}"
+    )
+    assert "Test message" in sent_message
+
+
+# ---------------------------------------------------------------------------
 # UTC-midnight date-attribution (plan § 12)
 # ---------------------------------------------------------------------------
 
