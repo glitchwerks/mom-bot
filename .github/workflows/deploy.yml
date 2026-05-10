@@ -10,13 +10,15 @@ name: Deploy (mom-bot)
 #   AZURE_TENANT_ID        — 48bca6c3-6d4f-4884-bc1a-648ae2362a32
 #   AZURE_SUBSCRIPTION_ID  — 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
 #
-# NOTE: image build+push to GHCR is not yet wired (Epic 1 work).
-# For v0 testing, manually push an image to ghcr.io/glitchwerks/mom-bot
-# and re-run this workflow. The workflow deploys whatever image exists at
-# ghcr.io/glitchwerks/mom-bot:<github.sha>.
 
 on:
   workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA of the image to deploy. Defaults to HEAD of `main`. Must match a SHA that has a built GHCR image."
+        type: string
+        required: false
+        default: ""
 
 jobs:
   deploy:
@@ -37,9 +39,28 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Resolve image SHA
+        id: resolve_sha
+        run: |
+          SHA="${{ inputs.commit_sha }}"
+          if [ -z "$SHA" ]; then
+            SHA="${{ github.sha }}"
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved image SHA: $SHA"
+
+      - name: Verify image exists in GHCR
+        run: |
+          SHA="${{ steps.resolve_sha.outputs.sha }}"
+          if ! docker manifest inspect "ghcr.io/glitchwerks/mom-bot:$SHA" >/dev/null 2>&1; then
+            echo "::error::Image ghcr.io/glitchwerks/mom-bot:$SHA does not exist in GHCR. Has build-image.yml run for this SHA on a green-CI main commit?"
+            exit 1
+          fi
+          echo "Image exists: ghcr.io/glitchwerks/mom-bot:$SHA"
+
       - name: Deploy container image to prod
         run: |
           az containerapp update \
             --name ca-mom-bot \
             --resource-group mom-bot \
-            --image ghcr.io/glitchwerks/mom-bot:${{ github.sha }}
+            --image ghcr.io/glitchwerks/mom-bot:${{ steps.resolve_sha.outputs.sha }}
