@@ -43,3 +43,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Bicep compiled output (ARM JSON) — source of truth is the .bicep files
+infra/*.json

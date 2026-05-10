@@ -215,18 +215,42 @@ New repo at `I:\games\raid\mom-bot`. Discord client connecting via inherited tok
 
 **Claude Code GitHub integrations** — mirror the workflow files from sibling repos (`siege-web/.github/workflows/claude-*.yml`) into mom-bot's `.github/workflows/` at Epic 0 time. Includes `@claude` mention triggers and any auto-review patterns the user runs as standard.
 
-**CD trigger — manual only via `workflow_dispatch` for v1.0.** Workflow accepts `target: dev | prod` input; runs `az containerapp update` (or `create` first time). Auto-deploy revisited after v1.0 ships.
+**CD trigger — manual only via `workflow_dispatch` for v1.0.** No `target` input — this workflow always deploys to prod. Auto-deploy revisited after v1.0 ships.
+
+### Dev/prod model — A++
+
+Mom-bot uses the **A++ model** (decided Epic 0.4, `2026-05-08`): local laptop
+runs dev, Azure runs prod only. There is no Azure dev environment.
+
+- **Local dev**: developer's laptop sets `MOM_BOT_ENV=dev`, authenticates via
+  `az login`, and reads `dev-*` secrets from the single shared Key Vault
+  (`kv-mombot-eastus2`) via `DefaultAzureCredential`. No Azure compute cost
+  for development.
+- **Prod (Azure)**: Container App `ca-mom-bot` sets `MOM_BOT_ENV=prod`, uses
+  `mi-mom-bot` (user-assigned managed identity) for Key Vault access.
+- **Single Key Vault, prefixed secrets**: `dev-*` and `prod-*` in
+  `kv-mombot-eastus2`. No separate dev KV to provision or manage.
+
+**Why A++ over a dev/prod Azure split:** `DefaultAzureCredential` resolves
+credentials transparently (local `az login` → managed identity in Azure),
+eliminating the need for per-environment GitHub Environments, separate
+federated credentials, or a second Container App running dev code. Single
+deploy target means the deploy workflow is always prod — simpler CI/CD with no
+`target` input selector and no risk of accidentally deploying to the wrong
+environment.
 
 **Secrets — hybrid model:**
 
 | Class | Storage | Access |
 |---|---|---|
 | Build-time (test creds, codecov, dummy values) | GitHub Actions repo secrets | `${{ secrets.* }}` |
-| Deploy-time (prod Discord token, Azure deploy SP, Key Vault references) | Azure Key Vault | OIDC federated identity GHA → AAD; `az keyvault secret show` at job runtime |
+| Runtime (Discord token, DB URL, App Insights) | Azure Key Vault `kv-mombot-eastus2` | `mi-mom-bot` MI (prod) or `az login` user (dev) via `DefaultAzureCredential` |
+| OIDC identifiers (non-sensitive) | GitHub repo variables | `${{ vars.AZURE_CLIENT_ID }}`, etc. |
 
 Provisioning at Epic 0:
-- Dedicated AAD app registration with federated credential trust for `glitchwerks/mom-bot` GHA workflows
-- Key Vault `Secret Get` role assigned to the AAD app on the mom-bot Key Vault
+- AAD app registration `mom-bot-gha` with two federated credentials: `main` push + `pull_request` (no `:environment:` federations — A++ has no GitHub Environments distinction)
+- Key Vault Secrets Officer role for `mom-bot-gha` SP (deploy-time writes)
+- Key Vault Secrets User role for `mi-mom-bot` MI (runtime reads)
 - `docs/secrets-inventory.md` lists every secret name + purpose + class (no values)
 
 ### Epic 1 — Reminder lift-and-shift

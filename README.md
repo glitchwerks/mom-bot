@@ -2,7 +2,7 @@
 
 Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
 
-**Status:** Epic 0.1 scaffolding complete — package layout, tooling, and Dockerfile in place.
+**Status:** Epic 0.4 in progress — secrets/AAD/KV Bicep + deploy workflow + config module added. Manual Azure provisioning required before deploy workflow can run (see `infra/aad-runbook.md`).
 
 ## Documentation
 
@@ -54,6 +54,50 @@ uv pip install -e ".[dev]"
 # 6. Container smoke build
 docker build .
 ```
+
+## Local Azure Access
+
+Mom-bot reads secrets from Azure Key Vault (`kv-mombot-eastus2`) at runtime via
+`DefaultAzureCredential`. On a developer laptop this resolves to your `az login`
+session — no managed identity or service principal needed locally.
+
+**Prerequisites:**
+
+```bash
+# 1. Log in to the mom-bot tenant (always pass --tenant to avoid cross-tenant confusion)
+az login --tenant 48bca6c3-6d4f-4884-bc1a-648ae2362a32
+
+# 2. Set the target subscription
+az account set --subscription 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
+
+# 3. Verify
+az account show --query '{tenant:tenantId, sub:id}' -o table
+```
+
+**Role requirement:** your user account needs `Key Vault Secrets User` on
+`kv-mombot-eastus2`. Request this from the repo admin (@cbeaulieu-gt), or grant
+it yourself if you have Owner/User Access Administrator on the subscription:
+
+```bash
+MY_OID=$(az ad signed-in-user show --query id -o tsv)
+KV_ID=$(az keyvault show -g mom-bot -n kv-mombot-eastus2 --query id -o tsv)
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee-object-id "$MY_OID" \
+  --assignee-principal-type User \
+  --scope "$KV_ID"
+```
+
+**Running locally with Key Vault secrets:**
+
+```bash
+# MOM_BOT_ENV=dev causes config.load_secret() to read dev-* secrets from KV.
+MOM_BOT_ENV=dev python -m mom_bot
+```
+
+`DefaultAzureCredential` picks up your `az login` session automatically — no
+additional environment variables required. See `docs/secrets-inventory.md` for
+the full list of secrets and their purposes.
 
 ## Database / Migrations
 

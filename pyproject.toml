@@ -13,6 +13,8 @@ dependencies = [
     "pydantic>=2",
     "sqlalchemy>=2",
     "alembic",
+    "azure-identity>=1.17",
+    "azure-keyvault-secrets>=4.8",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +54,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "migrations.*"
 ignore_errors = true
+
+# azure-identity ships py.typed but msal (a transitive dep) does not.
+# Suppress missing-stub errors for the msal import chain only.
+[[tool.mypy.overrides]]
+module = "msal.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

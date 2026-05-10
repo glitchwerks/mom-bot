@@ -1,0 +1,100 @@
+// containerapp.bicep — Container Apps Environment + Container App ca-mom-bot.
+//
+// Design choices:
+// - Consumption profile only (no workload profiles) — cheapest tier; mom-bot's
+//   workload is single-replica, tiny CPU/memory. WorkloadProfiles adds cost and
+//   complexity that buys nothing here.
+// - Ingress disabled — the Discord bot is outbound-only for v1.0. The sidecar
+//   /api/internal/role-sync endpoint (Epic 2.6) will re-enable ingress when it
+//   lands; keeping it off now is smallest blast radius.
+// - System-assigned + user-assigned MI both attached — system-assigned is the
+//   default identity for Azure SDK calls; user-assigned (mi-mom-bot) is bound
+//   explicitly for Key Vault via AZURE_CLIENT_ID env var so DefaultAzureCredential
+//   picks it up unambiguously in multi-MI environments.
+// - Single replica (scale 0-1) — SQLite + WAL requires single writer.
+//   See framework plan § Confirmed design decisions.
+
+@description('Azure region.')
+param location string
+
+@description('Name of the Container Apps Environment.')
+param containerAppsEnvironmentName string
+
+@description('Name of the Container App.')
+param containerAppName string
+
+@description('Resource ID of the user-assigned managed identity mi-mom-bot.')
+param managedIdentityId string
+
+@description('Container image reference (ghcr.io/glitchwerks/mom-bot:<sha>).')
+param containerImage string
+
+@description('Name of the Key Vault (used to build env var KV_NAME).')
+param keyVaultName string
+
+// ---------------------------------------------------------------------------
+// Container Apps Environment (Consumption profile)
+// ---------------------------------------------------------------------------
+
+resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: containerAppsEnvironmentName
+  location: location
+  properties: {
+    // Consumption-only: no workloadProfiles block → defaults to Consumption.
+    zoneRedundant: false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Container App
+// ---------------------------------------------------------------------------
+
+resource ca 'Microsoft.App/containerApps@2024-03-01' = {
+  name: containerAppName
+  location: location
+  identity: {
+    type: 'SystemAssigned, UserAssigned'
+    userAssignedIdentities: {
+      '${managedIdentityId}': {}
+    }
+  }
+  properties: {
+    environmentId: cae.id
+    configuration: {
+      // Ingress disabled — Discord bot is outbound-only for v1.0.
+      // Epic 2.6 (role-sync sidecar) will re-enable ingress.
+    }
+    template: {
+      scale: {
+        minReplicas: 0
+        maxReplicas: 1
+      }
+      containers: [
+        {
+          name: 'mom-bot'
+          image: containerImage
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: [
+            {
+              name: 'MOM_BOT_ENV'
+              value: 'prod'
+            }
+            {
+              name: 'MOM_BOT_KEY_VAULT_NAME'
+              value: keyVaultName
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+@description('Fully qualified domain name of the Container App (empty when ingress disabled).')
+output fqdn string = ca.properties.configuration.?ingress.?fqdn ?? ''
+
+@description('System-assigned principal ID of the Container App.')
+output systemAssignedPrincipalId string = ca.identity.principalId
