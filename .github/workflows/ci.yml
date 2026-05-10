@@ -2,7 +2,6 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -14,6 +13,9 @@ jobs:
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     permissions:
       contents: read
     steps:
@@ -33,6 +35,9 @@ jobs:
   format:
     name: Format (black)
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     permissions:
       contents: read
     steps:
@@ -52,6 +57,9 @@ jobs:
   types:
     name: Types (mypy)
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     permissions:
       contents: read
     steps:
@@ -71,6 +79,9 @@ jobs:
   tests:
     name: Tests (pytest)
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     permissions:
       contents: read
     steps:
@@ -90,6 +101,9 @@ jobs:
   docker-build:
     name: Docker build (smoke)
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     permissions:
       contents: read
     steps:
@@ -101,6 +115,9 @@ jobs:
     name: pip-audit (non-blocking)
     runs-on: ubuntu-latest
     continue-on-error: true
+    if: |
+      github.event_name == 'push' ||
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
     permissions:
       contents: read
     steps:
