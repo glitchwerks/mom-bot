@@ -7,8 +7,9 @@ Design notes
 ------------
 - In-memory SQLite + ``Base.metadata.create_all`` is used (no Alembic here —
   the alembic tests already cover schema correctness; create_all is faster).
-- ``load_secret`` is patched to return canned snowflake values so no Key Vault
-  round-trip occurs.
+- ``load_secret`` is patched to return canned values so no Key Vault
+  round-trip occurs.  The ``reminder-channel-name`` secret now holds a
+  channel name string instead of a snowflake (#47).
 - ``MomBot.wait_until_ready`` is patched to return immediately for most tests.
   ``test_setup_hook_returns_promptly_without_gateway`` is the exception: it
   intentionally does NOT mock ``wait_until_ready`` — this is the regression
@@ -17,6 +18,9 @@ Design notes
   by the wireup so the task is not garbage-collected.
 - A ``FakeChannel`` with a recorded ``send`` is registered so we can verify
   the Discord send target.
+- For the seed step, ``bot.guilds`` must contain a guild whose
+  ``text_channels`` list includes a channel named ``"reminders"`` — seed.py
+  uses ``discord.utils.get`` to resolve the name to a snowflake (#47).
 """
 
 from __future__ import annotations
@@ -24,8 +28,9 @@ from __future__ import annotations
 import asyncio
 import datetime
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
+import discord
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -39,7 +44,7 @@ from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
 
 _GUILD_ID = 999999999999999999
 _CHANNEL_ID = 111111111111111111
-_ROLE_ID = 222222222222222222
+_CHANNEL_NAME = "reminders"
 
 
 def _make_engine() -> Any:
@@ -57,10 +62,42 @@ def _make_session_factory(engine: Any) -> Any:
 class FakeChannel:
     """Minimal discord.TextChannel stand-in with a recorded send."""
 
-    def __init__(self, channel_id: int) -> None:
-        """Initialise with channel snowflake."""
+    def __init__(self, channel_id: int, name: str = _CHANNEL_NAME) -> None:
+        """Initialise with channel snowflake and name."""
         self.id = channel_id
+        self.name = name
         self.send = AsyncMock()
+
+
+def _make_fake_guilds(
+    channel_id: int = _CHANNEL_ID,
+    channel_name: str = _CHANNEL_NAME,
+) -> tuple[list[Any], FakeChannel]:
+    """Build a fake guilds list for patching ``bot.guilds``.
+
+    ``seed.py`` calls ``discord.utils.get(guild.text_channels, name=...)``,
+    which iterates ``text_channels`` and matches on ``.name``.  We use a
+    real :class:`FakeChannel` instance (with a real ``.name`` string
+    attribute) so the comparison works correctly — a plain ``MagicMock``
+    without ``spec=`` would return another mock for ``.name``, which will
+    never equal the channel name string.
+
+    ``discord.Client.guilds`` is a read-only property, so callers must use
+    ``patch.object(type(bot), "guilds", new_callable=PropertyMock)`` with
+    the returned list as the ``return_value``.
+
+    Returns:
+        A tuple of ``(guilds_list, fake_channel)`` where ``guilds_list``
+        is ready to use as the ``return_value`` of a ``PropertyMock``.
+    """
+    fake_channel = FakeChannel(channel_id, channel_name)
+
+    mock_guild = MagicMock(spec=discord.Guild)
+    mock_guild.text_channels = [fake_channel]
+    mock_guild.name = "fake-guild"
+    mock_guild.id = _GUILD_ID
+
+    return [mock_guild], fake_channel
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +128,7 @@ async def test_setup_hook_returns_promptly_without_gateway() -> None:
 
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
-        "reminder-channel-id": str(_CHANNEL_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
     }
 
     def fake_load_secret(name: str) -> str:
@@ -142,6 +179,9 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
     1. ``_maybe_seed_reminders`` is called (two rows in reminders table).
     2. The scheduler task is stored on ``bot._reminder_task``.
     3. The task is not done immediately (it is running, not finished).
+
+    The bot's ``guilds`` list is populated with a fake guild + channel
+    (``_CHANNEL_NAME``) so the seed step can resolve the channel name (#47).
     """
     from mom_bot.main import MomBot, build_intents
 
@@ -150,13 +190,14 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
 
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
-        "reminder-channel-id": str(_CHANNEL_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
     }
 
     def fake_load_secret(name: str) -> str:
         return load_secret_values[name]
 
     bot = MomBot(intents=build_intents())
+    fake_guilds, _ = _make_fake_guilds(_CHANNEL_ID, _CHANNEL_NAME)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
@@ -168,6 +209,14 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
         patch(
             "mom_bot.main._build_session_factory",
             return_value=session_factory,
+        ),
+        # discord.Client.guilds is a read-only property; patch it on the
+        # class so seed.py can resolve the channel name at seed time.
+        patch.object(
+            type(bot),
+            "guilds",
+            new_callable=PropertyMock,
+            return_value=fake_guilds,
         ),
     ):
         await bot.setup_hook()
@@ -216,13 +265,16 @@ async def test_scheduler_fires_custom_reminder() -> None:
     """A custom reminder due in 2 minutes fires after one tick of the scheduler.
 
     Scenario:
-    1. Seed the two default reminders via _maybe_seed_reminders.
-    2. Insert a custom reminder scheduled for today (UTC) at a fire_time_utc
+    1. Insert a custom reminder scheduled for today (UTC) at a fire_time_utc
        that is exactly ``now_utc.time()`` (i.e. it should fire on the first
        tick).
-    3. Run setup_hook() to start the scheduler task.
-    4. Give the event loop one iteration (yield) and verify the mock channel
+    2. Run setup_hook() to start the scheduler task.
+    3. Give the event loop one iteration (yield) and verify the mock channel
        send was called exactly once for the custom reminder.
+
+    The bot's ``guilds`` list is populated with a fake guild + channel so
+    the seed step can resolve the channel name (#47), even though the table
+    is already non-empty (seed is a no-op in this case).
     """
     import time_machine
 
@@ -257,7 +309,7 @@ async def test_scheduler_fires_custom_reminder() -> None:
 
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
-        "reminder-channel-id": str(_CHANNEL_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
     }
 
     def fake_load_secret(name: str) -> str:

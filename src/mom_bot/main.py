@@ -135,16 +135,23 @@ class MomBot(discord.Client):
         bot's lifetime — the trailing ``await scheduler.run()`` is the main
         scheduler loop, not just an init step.
 
+        The seed step reads ``reminder-channel-name`` from Key Vault and
+        resolves it to a Discord channel snowflake by looking up the channel
+        by name in ``self.guilds[0].text_channels`` (#47).  Resolution
+        happens once on first boot; the snowflake is stored in the DB.
+
         Raises:
-            mom_bot.config.ConfigError: If a required KV secret is absent.
+            mom_bot.config.ConfigError: If a required KV secret is absent,
+                the bot has no guilds, or the named channel is not found.
         """
         await self.wait_until_ready()
 
         factory = _build_session_factory()
 
         # Seed the reminder table on first boot from Key Vault (plan § 4).
+        # Pass self so seed.py can resolve the channel name → snowflake.
         with factory() as session:
-            _maybe_seed_reminders(session)
+            _maybe_seed_reminders(session, self)
 
         # Run the scheduler loop for the bot's lifetime (plan § 6).
         scheduler = ReminderScheduler(self, factory)
