@@ -25,6 +25,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pip-audit",
+    "time-machine",
 ]
 
 [tool.hatch.build.targets.wheel]
