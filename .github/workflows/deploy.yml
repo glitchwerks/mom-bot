@@ -10,10 +10,6 @@ name: Deploy (mom-bot)
 #   AZURE_TENANT_ID        — 48bca6c3-6d4f-4884-bc1a-648ae2362a32
 #   AZURE_SUBSCRIPTION_ID  — 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
 #
-# NOTE: image build+push to GHCR is not yet wired (Epic 1 work).
-# For v0 testing, manually push an image to ghcr.io/glitchwerks/mom-bot
-# and re-run this workflow. The workflow deploys whatever image exists at
-# ghcr.io/glitchwerks/mom-bot:<github.sha>.
 
 on:
   workflow_dispatch:
