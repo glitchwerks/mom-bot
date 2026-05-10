@@ -153,10 +153,11 @@ az deployment sub create `
 > `az bicep build --file main.bicep` does NOT validate the bicepparam
 > against the template — `build-params` does.
 
-Bicep handles the Key Vault RBAC role assignments:
+Bicep handles the following RBAC role assignments:
 
 - `mi-mom-bot` → **Key Vault Secrets User** (runtime read-only)
 - `mom-bot-gha` SP → **Key Vault Secrets Officer** (deploy-time read+write)
+- `mom-bot-gha` SP → **Container Apps Contributor** at RG `mom-bot` scope (granted by Bicep at deploy time; required for `az containerapp update` in `deploy.yml`)
 
 If the Bicep role assignments fail (e.g. `ghaServicePrincipalObjectId` was wrong),
 assign manually:
