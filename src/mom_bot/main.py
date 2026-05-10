@@ -7,23 +7,64 @@ guild-scoped ``/ping`` slash command that returns the bot version and uptime.
 The :func:`make_client` factory is intentionally separated from
 :func:`main` so tests can instantiate the client without invoking
 :meth:`discord.Client.run` (which would attempt a live gateway connection).
+
+Scheduler wiring (plan § 6)
+----------------------------
+:meth:`MomBot.setup_hook` awaits :meth:`discord.Client.wait_until_ready`
+before starting the reminder scheduler so that the gateway READY event has
+fired before any guild-touching call is made.  The scheduler task is stored
+on ``bot._reminder_task`` to prevent garbage collection.
+
+Session factory
+---------------
+:func:`_build_session_factory` constructs a SQLAlchemy :class:`sessionmaker`
+from the ``MOM_BOT_DATABASE_URL`` environment variable (falling back to a
+local SQLite file ``./mom_bot.db`` for developer convenience).  This is
+called once at startup and the factory is shared across all scheduler ticks.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 
 import discord
 from discord import app_commands
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot import __version__
 from mom_bot.config import load_secret
+from mom_bot.reminders.scheduler import ReminderScheduler
+from mom_bot.reminders.seed import _maybe_seed_reminders
 
 _logger = logging.getLogger(__name__)
 
 # Recorded once at module import; used to compute uptime in /ping responses.
 _started_at: float = time.monotonic()
+
+# ---------------------------------------------------------------------------
+# Session factory (patchable in tests via mock of _build_session_factory)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_DB_URL = "sqlite:///./mom_bot.db"
+
+
+def _build_session_factory() -> sessionmaker[Session]:
+    """Build a SQLAlchemy session factory from the configured database URL.
+
+    Reads ``MOM_BOT_DATABASE_URL`` from the environment; falls back to a
+    local SQLite file ``./mom_bot.db`` when the variable is absent (developer
+    convenience).
+
+    Returns:
+        A :class:`~sqlalchemy.orm.sessionmaker` bound to the configured engine.
+    """
+    db_url = os.environ.get("MOM_BOT_DATABASE_URL", _DEFAULT_DB_URL)
+    engine = create_engine(db_url, echo=False)
+    return sessionmaker(bind=engine)
 
 
 class MomBot(discord.Client):
@@ -36,6 +77,8 @@ class MomBot(discord.Client):
         tree: The slash-command tree bound to this client instance.
         guild: The target guild as a :class:`discord.Object`; populated by
             :meth:`setup_hook` after ``guild-id`` is resolved from Key Vault.
+        _reminder_task: The asyncio task running the reminder scheduler;
+            stored to prevent garbage collection.
     """
 
     def __init__(self, intents: discord.Intents) -> None:
@@ -48,19 +91,25 @@ class MomBot(discord.Client):
         super().__init__(intents=intents)
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.guild: discord.Object | None = None
+        self._reminder_task: asyncio.Task[None] | None = None
 
     async def setup_hook(self) -> None:
-        """Sync guild-scoped slash commands at startup.
+        """Sync slash commands and wire the reminder scheduler.
 
         Called by discord.py before :meth:`on_ready`; this is the canonical
-        location for registering and syncing application commands.  Commands
-        registered globally (via the tree) are copied to the target guild so
-        they appear instantly — guild-scoped commands propagate in seconds,
-        whereas globally-registered commands take up to one hour.
+        location for registering and syncing application commands.  After
+        syncing, this method awaits :meth:`~discord.Client.wait_until_ready`
+        and then:
+
+        1. Seeds the reminder table via :func:`_maybe_seed_reminders` if it
+           is empty (plan § 4 seed-on-boot).
+        2. Starts the :class:`~mom_bot.reminders.scheduler.ReminderScheduler`
+           as an asyncio task and stores it on ``self._reminder_task`` to
+           prevent garbage collection (plan § 6).
 
         Raises:
-            mom_bot.config.ConfigError: If ``guild-id`` is absent from Key
-                Vault.
+            mom_bot.config.ConfigError: If ``guild-id`` or a required KV
+                secret is absent from Key Vault.
             ValueError: If the stored guild-id cannot be cast to ``int``.
             discord.HTTPException: If the slash-command sync request fails.
         """
@@ -69,6 +118,22 @@ class MomBot(discord.Client):
         self.tree.copy_global_to(guild=self.guild)
         await self.tree.sync(guild=self.guild)
         _logger.info("Synced slash commands to guild %s", guild_id)
+
+        # Gate on READY before any guild-touching scheduler work (plan § 6).
+        await self.wait_until_ready()
+
+        # Build the session factory (patchable in tests via the module-level
+        # _build_session_factory function).
+        factory = _build_session_factory()
+
+        # Seed the reminder table on first boot from Key Vault (plan § 4).
+        with factory() as session:
+            _maybe_seed_reminders(session)
+
+        # Start the scheduler loop; store the task to prevent GC (plan § 6).
+        scheduler = ReminderScheduler(self, factory)
+        self._reminder_task = asyncio.create_task(scheduler.run(), name="reminder-scheduler")
+        _logger.info("Reminder scheduler started")
 
     async def on_ready(self) -> None:
         """Log connection details once the client is fully connected.

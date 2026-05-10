@@ -102,6 +102,30 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
               value: keyVaultName
             }
           ]
+          // Exec liveness probe — confirms the reminder scheduler loop is
+          // alive by checking the sentinel file at /tmp/scheduler-heartbeat.
+          // Three consecutive 30 s failures (~90 s) trigger a restart.
+          // initialDelaySeconds: 30 matches the cold-start grace period.
+          // See plan § 8 for full spec.
+          probes: [
+            {
+              type: 'Liveness'
+              // BCP037: 'exec' is valid in the ARM API for ContainerAppProbe but
+              // the Bicep type definition is missing it. Suppress until the type
+              // is updated upstream (https://aka.ms/bicep-type-issues).
+              #disable-next-line BCP037
+              exec: {
+                command: [
+                  'python'
+                  '-m'
+                  'mom_bot.health.liveness'
+                ]
+              }
+              periodSeconds: 30
+              failureThreshold: 3
+              initialDelaySeconds: 30
+            }
+          ]
         }
       ]
     }
