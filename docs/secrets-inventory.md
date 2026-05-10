@@ -74,6 +74,24 @@ future operator can `UPDATE reminders SET channel_id = ... WHERE name =
 | `dev-reminder-mention-role-id` | No (different guilds) | Discord role snowflake to mention at fire time (the `Member` role equivalent in the dev guild) | Runtime | Discord Developer Portal — enable Developer Mode, right-click the role → Copy ID | Static; update if the role is recreated |
 | `prod-reminder-mention-role-id` | No (different guilds) | Discord role snowflake to mention at fire time (the `Member` role equivalent in the prod guild) | Runtime | Discord Developer Portal | Static |
 
+### Migration from per-reminder channel secrets (#43)
+
+If you previously seeded `*-reminder-{hydra,chimera}-channel-id` (the old
+two-secret layout), follow these steps before deploying the #43 code:
+
+1. Copy either old value (both should be the same channel) into the new
+   consolidated secret: `az keyvault secret set --vault-name kv-mombot-eastus2
+   --name <env>-reminder-channel-id --value <channel-id>`. Repeat for both
+   `dev-` and `prod-`.
+2. Deploy the updated bot and verify it boots cleanly — `_maybe_seed_reminders`
+   will read the new secret name.
+3. After confirming a clean boot, delete the old secrets:
+   `az keyvault secret delete --vault-name kv-mombot-eastus2 --name <env>-reminder-hydra-channel-id`
+   and the same for `<env>-reminder-chimera-channel-id`.
+
+New installs (no prior seeding) can skip this section and go straight to
+Step 8 of `infra/aad-runbook.md`.
+
 ## Open question
 
 **#9 — Siege-web service token rotation cadence:** the `prod-*` secret for the

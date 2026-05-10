@@ -131,7 +131,7 @@ def _maybe_seed_reminders(session: Session) -> None:
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra and Chimera" " (channel=%d) with role=%d",
+        "_maybe_seed_reminders: seeded Hydra and Chimera (channel=%d) with role=%d",
         channel,
         mention_role,
     )
