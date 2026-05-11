@@ -1,6 +1,7 @@
 """Tests for _maybe_seed_reminders.
 
 Verifies idempotent seed-on-boot from Key Vault values, including
+guild resolution via the per-env ``guild-id`` KV secret (#49) and
 channel-name-to-snowflake resolution via the discord.py client (#47).
 """
 
@@ -42,13 +43,18 @@ def session() -> Session:
 
 @pytest.fixture()
 def mock_bot() -> MagicMock:
-    """A discord.Client mock with one guild containing one text channel.
+    """A discord.Client mock whose get_guild() returns a configured guild.
 
-    Uses ``spec=`` on all mocks so that attribute access is constrained to
-    real discord.py attributes — critical for ``discord.utils.get``, which
-    iterates the channel list and compares ``channel.name`` by value.
+    Uses ``spec=`` on all mocks so attribute access is constrained to real
+    discord.py attributes — critical for ``discord.utils.get``, which
+    iterates ``text_channels`` and compares ``channel.name`` by value.
     Without ``spec=``, ``mock.name`` returns a fresh ``MagicMock`` that
     will never string-equal ``"reminders"``.
+
+    The bot resolves guild by ID via ``bot.get_guild(int(guild_id))``, so
+    we set ``bot.get_guild`` to return ``mock_guild`` when called with the
+    expected integer ID (#49).  The old ``bot.guilds = [mock_guild]`` pattern
+    is replaced — ``bot.guilds[0]`` was non-deterministic in multi-guild bots.
     """
     mock_channel = MagicMock(spec=discord.TextChannel)
     mock_channel.name = _CHANNEL_NAME
@@ -60,13 +66,18 @@ def mock_bot() -> MagicMock:
     mock_guild.id = _GUILD_ID
 
     bot = MagicMock(spec=discord.Client)
-    bot.guilds = [mock_guild]
+    bot.get_guild = MagicMock(return_value=mock_guild)
     return bot
 
 
 def _secret_side_effect(name: str) -> str:
-    """Return a fake channel name for each expected secret name."""
+    """Return a fake value for each expected KV secret name.
+
+    Covers both ``guild-id`` (needed for guild resolution, #49) and
+    ``reminder-channel-name`` (needed for channel resolution, #47).
+    """
     secrets = {
+        "guild-id": str(_GUILD_ID),
         "reminder-channel-name": _CHANNEL_NAME,
     }
     if name not in secrets:
@@ -210,6 +221,10 @@ def test_seed_channel_not_found_logs_critical_and_raises(
     """
 
     def bad_secret(name: str) -> str:
+        # Return a valid guild-id so guild resolution proceeds; return a
+        # non-existent channel name so discord.utils.get finds no match.
+        if name == "guild-id":
+            return str(_GUILD_ID)
         return "nonexistent-channel"
 
     with caplog.at_level(logging.CRITICAL, logger="mom_bot.reminders.seed"):
@@ -226,25 +241,28 @@ def test_seed_channel_not_found_logs_critical_and_raises(
     assert len(critical_records) >= 1
 
 
-def test_seed_bot_has_no_guilds_raises_config_error(
+def test_seed_bot_not_in_configured_guild_raises_config_error(
     session: Session,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Bot with empty guilds list → ConfigError raised + CRITICAL logged.
+    """bot.get_guild(guild_id) returns None → ConfigError raised + CRITICAL logged.
 
-    This is a paranoid guard: after gateway READY the guilds list should
-    never be empty.  If it is, the bot cannot resolve any channel and must
-    exit cleanly rather than inserting a bad row.
+    Covers both "bot is in zero guilds" and "bot is in other guilds but not
+    the one named in KV" — ``get_guild()`` returning None is the single
+    authoritative signal for both cases.  Replacing the old ``bot.guilds``
+    empty-list guard with this check makes the error message actionable:
+    it names the expected guild ID and the KV secret to fix (#49).
 
-    Uses pytest's ``caplog`` fixture for log capture — this is robust
-    across test-ordering effects (Alembic fileConfig, etc.).
+    Uses pytest's ``caplog`` fixture for log capture — robust across
+    test-ordering effects (Alembic fileConfig, etc.).
 
     Imports ``ConfigError`` at call-time to avoid stale-class issues when
     ``test_config.py`` reloads ``mom_bot.config`` via ``sys.modules.pop``.
     """
-    # Build a bot mock with NO guilds.
-    empty_bot = MagicMock(spec=discord.Client)
-    empty_bot.guilds = []
+    # Build a bot mock where get_guild() returns None — bot is not a member
+    # of the guild whose ID is stored in the "guild-id" KV secret.
+    absent_bot = MagicMock(spec=discord.Client)
+    absent_bot.get_guild = MagicMock(return_value=None)
 
     with caplog.at_level(logging.CRITICAL, logger="mom_bot.reminders.seed"):
         with patch(
@@ -252,7 +270,7 @@ def test_seed_bot_has_no_guilds_raises_config_error(
             side_effect=_secret_side_effect,
         ):
             with pytest.raises(Exception) as exc_info:
-                _maybe_seed_reminders(session, empty_bot)
+                _maybe_seed_reminders(session, absent_bot)
 
     # Verify exception type by name to survive module-reload class divergence.
     assert exc_info.type.__name__ == "ConfigError"

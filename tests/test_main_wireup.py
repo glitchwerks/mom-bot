@@ -18,9 +18,11 @@ Design notes
   by the wireup so the task is not garbage-collected.
 - A ``FakeChannel`` with a recorded ``send`` is registered so we can verify
   the Discord send target.
-- For the seed step, ``bot.guilds`` must contain a guild whose
-  ``text_channels`` list includes a channel named ``"reminders"`` — seed.py
-  uses ``discord.utils.get`` to resolve the name to a snowflake (#47).
+- For the seed step, ``bot.get_guild(guild_id)`` is patched to return a guild
+  whose ``text_channels`` list includes a channel named ``"reminders"``.
+  seed.py now resolves guild by ID (from the ``guild-id`` KV secret) rather
+  than via ``bot.guilds[0]``, fixing non-deterministic guild selection when
+  the bot account is a member of multiple guilds (#49).
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -69,26 +71,27 @@ class FakeChannel:
         self.send = AsyncMock()
 
 
-def _make_fake_guilds(
+def _make_fake_guild(
     channel_id: int = _CHANNEL_ID,
     channel_name: str = _CHANNEL_NAME,
-) -> tuple[list[Any], FakeChannel]:
-    """Build a fake guilds list for patching ``bot.guilds``.
+) -> tuple[MagicMock, FakeChannel]:
+    """Build a fake guild for patching ``bot.get_guild``.
 
-    ``seed.py`` calls ``discord.utils.get(guild.text_channels, name=...)``,
-    which iterates ``text_channels`` and matches on ``.name``.  We use a
-    real :class:`FakeChannel` instance (with a real ``.name`` string
-    attribute) so the comparison works correctly — a plain ``MagicMock``
-    without ``spec=`` would return another mock for ``.name``, which will
-    never equal the channel name string.
+    ``seed.py`` calls ``bot.get_guild(int(guild_id))`` (resolved from the
+    ``guild-id`` KV secret) and then resolves the channel via
+    ``discord.utils.get(guild.text_channels, name=...)``.  We use a real
+    :class:`FakeChannel` instance (with a real ``.name`` string attribute)
+    so the comparison works correctly — a plain ``MagicMock`` without
+    ``spec=`` would return another mock for ``.name``, which will never
+    equal the channel name string.
 
-    ``discord.Client.guilds`` is a read-only property, so callers must use
-    ``patch.object(type(bot), "guilds", new_callable=PropertyMock)`` with
-    the returned list as the ``return_value``.
+    ``get_guild`` is a regular method (not a property), so no
+    ``PropertyMock`` is needed — patch directly with
+    ``patch.object(bot, "get_guild", return_value=mock_guild)``.
 
     Returns:
-        A tuple of ``(guilds_list, fake_channel)`` where ``guilds_list``
-        is ready to use as the ``return_value`` of a ``PropertyMock``.
+        A tuple of ``(mock_guild, fake_channel)`` where ``mock_guild`` is
+        ready to use as the ``return_value`` of ``bot.get_guild``.
     """
     fake_channel = FakeChannel(channel_id, channel_name)
 
@@ -97,7 +100,7 @@ def _make_fake_guilds(
     mock_guild.name = "fake-guild"
     mock_guild.id = _GUILD_ID
 
-    return [mock_guild], fake_channel
+    return mock_guild, fake_channel
 
 
 # ---------------------------------------------------------------------------
@@ -180,8 +183,10 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
     2. The scheduler task is stored on ``bot._reminder_task``.
     3. The task is not done immediately (it is running, not finished).
 
-    The bot's ``guilds`` list is populated with a fake guild + channel
-    (``_CHANNEL_NAME``) so the seed step can resolve the channel name (#47).
+    The bot's ``get_guild`` method is patched to return a guild containing
+    a channel named ``"reminders"`` so the seed step can resolve the channel
+    name to a snowflake (#47).  ``get_guild`` is the correct lookup since
+    seed.py now resolves by ID from the ``guild-id`` KV secret (#49).
     """
     from mom_bot.main import MomBot, build_intents
 
@@ -197,7 +202,7 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
         return load_secret_values[name]
 
     bot = MomBot(intents=build_intents())
-    fake_guilds, _ = _make_fake_guilds(_CHANNEL_ID, _CHANNEL_NAME)
+    mock_guild, _ = _make_fake_guild(_CHANNEL_ID, _CHANNEL_NAME)
 
     with (
         patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
@@ -210,14 +215,9 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
             "mom_bot.main._build_session_factory",
             return_value=session_factory,
         ),
-        # discord.Client.guilds is a read-only property; patch it on the
-        # class so seed.py can resolve the channel name at seed time.
-        patch.object(
-            type(bot),
-            "guilds",
-            new_callable=PropertyMock,
-            return_value=fake_guilds,
-        ),
+        # seed.py calls bot.get_guild(int(guild_id)) — patch the method
+        # directly; no PropertyMock needed (get_guild is a regular method).
+        patch.object(bot, "get_guild", return_value=mock_guild),
     ):
         await bot.setup_hook()
 
