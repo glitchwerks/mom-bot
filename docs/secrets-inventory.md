@@ -52,44 +52,41 @@ KV secrets, because they are non-sensitive OIDC identifiers):
 | `AZURE_TENANT_ID` | `48bca6c3-6d4f-4884-bc1a-648ae2362a32` |
 | `AZURE_SUBSCRIPTION_ID` | `213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0` |
 
-## Reminder scheduler secrets (added in #29, collapsed in #43, role dropped in #45, name-not-snowflake in #47)
+## Reminder scheduler secrets (added in #29, collapsed in #43, role dropped in #45, name-not-snowflake in #47, role restored by name in #51)
 
-The following secret is read by `_maybe_seed_reminders`
+The following secrets are read by `_maybe_seed_reminders`
 (`src/mom_bot/reminders/seed.py`) on first boot if the `reminders` table is
-empty. It must be populated in both `kv-mom-bot-dev` and `kv-mom-bot-prod`
-**before** deploying the bot for the first time; the bot exits with CRITICAL if
-it is missing.
+empty. They must be populated in `kv-mombot-eastus2` **before** deploying
+the bot for the first time; the bot exits with CRITICAL if any are missing.
 
-> **Warning — channel renames require a manual SQL UPDATE.**
-> The channel name is resolved to a snowflake once at first boot and stored in
-> the `channel_id` DB column. If the Discord channel is renamed after the initial
-> seed, `seed.py` will not re-run (the table is non-empty) and the stored
-> snowflake remains valid — the channel still exists, only its name changed.
-> However, if you ever clear the DB and reseed, the new name must already be in
-> KV. To update the stored snowflake without reseeding, run:
+> **Warning — channel or role renames require a manual SQL UPDATE.**
+> Both the channel name and role name are resolved to snowflakes once at first
+> boot and stored in `channel_id` and `role_mention_id` DB columns. If either
+> is renamed after the initial seed, `seed.py` will not re-run (the table is
+> non-empty). Update with SQL:
 > `UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'`
+> `UPDATE reminders SET role_mention_id = <new-snowflake> WHERE name = '<X>'`
 
-Both Hydra and Chimera reminders fire to the **same channel per env** — a
-single `reminder-channel-name` secret replaces the previous per-reminder
-`reminder-hydra-channel-id` / `reminder-chimera-channel-id` pair (#43).
-The `role_mention_id` column stays nullable in the schema but both seeded rows
-have `NULL` — reminders post without pinging any role (#45). A future operator
-can `UPDATE reminders SET role_mention_id = <snowflake> WHERE name = '<X>'`
-to re-add a ping for a specific reminder without touching `seed.py`.
+Both Hydra and Chimera reminders fire to the **same channel per env** and
+ping the **same role per env**. `seed.py` resolves both names to snowflakes
+at first boot via the connected discord.py client.
 
-The secret value is the **channel name** (plain string, e.g. `"reminders"`),
-not a snowflake integer (#47). `seed.py` resolves the name to a snowflake at
-first boot using the connected discord.py client
-(`discord.utils.get(bot.guilds[0].text_channels, name=channel_name)`). The
-resolved snowflake is stored in the `channel_id` DB column. The `channel_id`
-column schema is unchanged (still an integer). If the channel is renamed after
-the first successful seed, update with SQL:
-`UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'`
+Secret values are **plain strings** (not snowflake integers):
+
+- `reminder-channel-name` stores the channel name (e.g. `"reminders"`).
+  `seed.py` resolves via `discord.utils.get(guild.text_channels, name=...)`.
+- `reminder-mention-role-name` stores the role name (e.g. `"Member"`).
+  `seed.py` resolves via `discord.utils.get(guild.roles, name=...)`.
+
+The resolved snowflakes are stored in the `channel_id` and `role_mention_id`
+DB columns respectively. Column schemas are unchanged (both INTEGER).
 
 | Secret name (in KV) | Same in dev/prod? | Purpose | Type | Source / owner | Rotation cadence |
 |---|---|---|---|---|---|
 | `dev-reminder-channel-name` | No (different guilds) | Discord channel name where both Hydra and Chimera reminders fire — dev guild | String (e.g. `"reminders"`) | The channel name as shown in Discord — no Developer Mode required | Static; only changes if the channel is renamed (update KV + SQL) |
 | `prod-reminder-channel-name` | No (different guilds) | Discord channel name where both Hydra and Chimera reminders fire — prod guild | String (e.g. `"reminders"`) | The channel name as shown in Discord — no Developer Mode required | Static |
+| `dev-reminder-mention-role-name` | Yes (role names typically match across guilds; same `"Member"` default as source bot `clan_reminders.py:L107`) | Discord role name to ping when Hydra and Chimera fire — dev guild | String (e.g. `"Member"`) | Discord: Settings → Roles — no Developer Mode required for the name; right-click role → Copy Role ID for the snowflake (for manual SQL fixes) | Static; only changes if the role is renamed (update KV + SQL) |
+| `prod-reminder-mention-role-name` | Yes (same as dev; see above) | Discord role name to ping when Hydra and Chimera fire — prod guild | String (e.g. `"Member"`) | Same as dev — check role name in Discord Settings → Roles | Static |
 
 ### Migration history
 
@@ -108,12 +105,21 @@ two-secret layout from before #43), follow these steps before deploying the
    `az keyvault secret delete --vault-name kv-mombot-eastus2 --name <env>-reminder-hydra-channel-id`
    and the same for `<env>-reminder-chimera-channel-id`.
 
-#### Role-mention secret removed (#45)
+#### Role-mention secret removed (#45), restored as name-valued secret (#51)
 
 If you previously seeded `*-reminder-mention-role-id` (added in #44, removed
-in #45), those secrets are now unused. Delete them at your convenience:
+in #45), those secrets used a snowflake integer value and are now superseded
+by the name-valued `*-reminder-mention-role-name` secrets added in #51.
+Delete the old snowflake secrets at your convenience:
 `az keyvault secret delete --vault-name kv-mombot-eastus2 --name dev-reminder-mention-role-id`
 and the same for `prod-reminder-mention-role-id`.
+
+Then seed the new name-valued secrets:
+```powershell
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-reminder-mention-role-name --value "Member"
+az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-reminder-mention-role-name --value "Member"
+```
+Confirm the role name matches your guild's actual role before deploying.
 
 #### From snowflake → channel name (#47)
 

@@ -1,8 +1,9 @@
 """Tests for _maybe_seed_reminders.
 
 Verifies idempotent seed-on-boot from Key Vault values, including
-guild resolution via the per-env ``guild-id`` KV secret (#49) and
-channel-name-to-snowflake resolution via the discord.py client (#47).
+guild resolution via the per-env ``guild-id`` KV secret (#49),
+channel-name-to-snowflake resolution via the discord.py client (#47),
+and role-name-to-snowflake resolution (#51).
 """
 
 from __future__ import annotations
@@ -25,9 +26,11 @@ from mom_bot.reminders.seed import _maybe_seed_reminders
 # ---------------------------------------------------------------------------
 
 _CHANNEL_NAME = "reminders"
+_ROLE_NAME = "Member"
 # Discord snowflakes are 18-19 digit integers; SQLite stores INTEGER as a
-# signed 64-bit value (max ~9.2e18).  Use a value safely within that range.
+# signed 64-bit value (max ~9.2e18).  Use values safely within that range.
 _CHANNEL_ID = 987654321098765432
+_ROLE_ID = 111222333444555666
 _GUILD_ID = 1234567890
 _GUILD_NAME = "test-guild"
 
@@ -47,21 +50,29 @@ def mock_bot() -> MagicMock:
 
     Uses ``spec=`` on all mocks so attribute access is constrained to real
     discord.py attributes — critical for ``discord.utils.get``, which
-    iterates ``text_channels`` and compares ``channel.name`` by value.
+    iterates ``text_channels`` / ``roles`` and compares ``.name`` by value.
     Without ``spec=``, ``mock.name`` returns a fresh ``MagicMock`` that
-    will never string-equal ``"reminders"``.
+    will never string-equal the expected name.
 
     The bot resolves guild by ID via ``bot.get_guild(int(guild_id))``, so
     we set ``bot.get_guild`` to return ``mock_guild`` when called with the
     expected integer ID (#49).  The old ``bot.guilds = [mock_guild]`` pattern
     is replaced — ``bot.guilds[0]`` was non-deterministic in multi-guild bots.
+
+    The guild exposes both ``text_channels`` (for channel resolution, #47)
+    and ``roles`` (for role resolution, #51).
     """
     mock_channel = MagicMock(spec=discord.TextChannel)
     mock_channel.name = _CHANNEL_NAME
     mock_channel.id = _CHANNEL_ID
 
+    mock_role = MagicMock(spec=discord.Role)
+    mock_role.name = _ROLE_NAME
+    mock_role.id = _ROLE_ID
+
     mock_guild = MagicMock(spec=discord.Guild)
     mock_guild.text_channels = [mock_channel]
+    mock_guild.roles = [mock_role]
     mock_guild.name = _GUILD_NAME
     mock_guild.id = _GUILD_ID
 
@@ -73,12 +84,14 @@ def mock_bot() -> MagicMock:
 def _secret_side_effect(name: str) -> str:
     """Return a fake value for each expected KV secret name.
 
-    Covers both ``guild-id`` (needed for guild resolution, #49) and
-    ``reminder-channel-name`` (needed for channel resolution, #47).
+    Covers ``guild-id`` (guild resolution, #49),
+    ``reminder-channel-name`` (channel resolution, #47), and
+    ``reminder-mention-role-name`` (role resolution, #51).
     """
     secrets = {
         "guild-id": str(_GUILD_ID),
         "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
     }
     if name not in secrets:
         raise KeyError(f"Unexpected secret: {name!r}")
@@ -91,12 +104,11 @@ def _secret_side_effect(name: str) -> str:
 
 
 def test_seed_empty_table_inserts_hydra_and_chimera(session: Session, mock_bot: MagicMock) -> None:
-    """Empty table + valid KV + matching channel → two rows with resolved ID.
+    """Empty table + valid KV + matching channel + matching role → two rows.
 
-    Both rows share the resolved ``channel_id`` (the snowflake from
-    ``discord.utils.get``, NOT the channel name string).
-    ``role_mention_id`` is intentionally ``None`` for both rows — reminders
-    post without role pings (#45).
+    Both rows share the resolved ``channel_id`` (snowflake from
+    ``discord.utils.get`` on text_channels, #47) and have a non-NULL
+    ``role_mention_id`` equal to the mocked role's snowflake (#51).
 
     Hydra: weekday=1, fire_time=07:00:00.
     Chimera: weekday=2, fire_time=12:00:00.
@@ -114,16 +126,22 @@ def test_seed_empty_table_inserts_hydra_and_chimera(session: Session, mock_bot: 
     assert hydra.weekday == 1
     assert hydra.fire_time_utc == datetime.time(7, 0, 0)
     assert hydra.channel_id == _CHANNEL_ID
-    assert hydra.role_mention_id is None
+    # role_mention_id must be resolved to the mocked role's snowflake (#51).
+    assert hydra.role_mention_id is not None
+    assert hydra.role_mention_id == _ROLE_ID
 
     chimera = session.execute(select(Reminder).where(Reminder.name == "Chimera")).scalar_one()
     assert chimera.weekday == 2
     assert chimera.fire_time_utc == datetime.time(12, 0, 0)
     assert chimera.channel_id == _CHANNEL_ID
-    assert chimera.role_mention_id is None
+    # role_mention_id must be resolved to the mocked role's snowflake (#51).
+    assert chimera.role_mention_id is not None
+    assert chimera.role_mention_id == _ROLE_ID
 
     # Both rows share the single resolved channel — verify equality.
     assert hydra.channel_id == chimera.channel_id
+    # Both rows share the single resolved role — verify equality.
+    assert hydra.role_mention_id == chimera.role_mention_id
 
 
 def test_seed_non_empty_table_is_noop(session: Session, mock_bot: MagicMock) -> None:
@@ -276,3 +294,195 @@ def test_seed_bot_not_in_configured_guild_raises_config_error(
     assert exc_info.type.__name__ == "ConfigError"
     critical_records = [r for r in caplog.records if r.levelname == "CRITICAL"]
     assert len(critical_records) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Role resolution (#51) — mirrors channel-not-found tests above
+# ---------------------------------------------------------------------------
+
+
+def test_seed_role_mention_id_equals_mocked_role_snowflake(
+    session: Session,
+    mock_bot: MagicMock,
+) -> None:
+    """Resolved role snowflake is stored in role_mention_id on both rows.
+
+    Specifically verifies the resolved value equals the mocked role's
+    ``.id`` attribute (not just any non-None value), mirroring the channel
+    test that checks ``channel_id == _CHANNEL_ID`` (#47).
+    """
+    with patch(
+        "mom_bot.reminders.seed.load_secret",
+        side_effect=_secret_side_effect,
+    ):
+        _maybe_seed_reminders(session, mock_bot)
+
+    rows = session.execute(select(Reminder)).scalars().all()
+    assert len(rows) == 2
+    for row in rows:
+        assert (
+            row.role_mention_id is not None
+        ), f"Expected role_mention_id to be resolved for {row.name!r}, got None"
+        assert (
+            row.role_mention_id == _ROLE_ID
+        ), f"Expected role_mention_id={_ROLE_ID}, got {row.role_mention_id}"
+
+
+def test_seed_role_kv_secret_missing_logs_critical_and_raises(
+    session: Session,
+    mock_bot: MagicMock,
+) -> None:
+    """KV missing reminder-mention-role-name → CRITICAL logged + exception.
+
+    Mirrors ``test_seed_kv_failure_logs_critical_and_raises`` for the new
+    role-name secret.  The error must fire before any DB rows are written.
+    """
+    error = RuntimeError("KV unreachable")
+
+    captured: list[logging.LogRecord] = []
+
+    class _CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    handler = _CapturingHandler()
+    seed_logger = logging.getLogger("mom_bot.reminders.seed")
+    seed_logger.disabled = False
+    seed_logger.addHandler(handler)
+    seed_logger.setLevel(logging.DEBUG)
+
+    def _secret_missing_role(name: str) -> str:
+        """Succeed for guild-id and channel-name; fail for role-name."""
+        if name == "guild-id":
+            return str(_GUILD_ID)
+        if name == "reminder-channel-name":
+            return _CHANNEL_NAME
+        raise error
+
+    try:
+        with patch(
+            "mom_bot.reminders.seed.load_secret",
+            side_effect=_secret_missing_role,
+        ):
+            with pytest.raises(RuntimeError, match="KV unreachable"):
+                _maybe_seed_reminders(session, mock_bot)
+    finally:
+        seed_logger.removeHandler(handler)
+
+    # At least one CRITICAL log must have been emitted.
+    critical_records = [r for r in captured if r.levelname == "CRITICAL"]
+    assert len(critical_records) >= 1
+
+    # No rows should have been inserted.
+    count = session.scalar(select(func.count(Reminder.id)))
+    assert count == 0
+
+
+def test_seed_role_not_found_in_guild_logs_critical_and_raises(
+    session: Session,
+    mock_bot: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """discord.utils.get(guild.roles, name=...) returns None → ConfigError.
+
+    The mock bot's guild has a role named ``_ROLE_NAME`` by default.  This
+    test overrides the KV secret to return a name that does not match any
+    guild role, causing the resolver to raise ConfigError and log CRITICAL.
+    No rows should be inserted.
+
+    Mirrors ``test_seed_channel_not_found_logs_critical_and_raises`` for
+    role resolution (#51).
+    """
+
+    def _secret_bad_role(name: str) -> str:
+        if name == "guild-id":
+            return str(_GUILD_ID)
+        if name == "reminder-channel-name":
+            return _CHANNEL_NAME
+        # Return a non-existent role name.
+        return "nonexistent-role"
+
+    with caplog.at_level(logging.CRITICAL, logger="mom_bot.reminders.seed"):
+        with patch(
+            "mom_bot.reminders.seed.load_secret",
+            side_effect=_secret_bad_role,
+        ):
+            with pytest.raises(Exception) as exc_info:
+                _maybe_seed_reminders(session, mock_bot)
+
+    # Verify exception type by name to survive module-reload class divergence.
+    assert exc_info.type.__name__ == "ConfigError"
+    critical_records = [r for r in caplog.records if r.levelname == "CRITICAL"]
+    assert len(critical_records) >= 1
+
+    # No rows should have been inserted.
+    count = session.scalar(select(func.count(Reminder.id)))
+    assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# KV secret value validation — ValueError vs ConfigError distinction (#40)
+# ---------------------------------------------------------------------------
+
+
+def test_seed_guild_id_non_numeric_raises_config_error_not_failed_to_load(
+    session: Session,
+    mock_bot: MagicMock,
+) -> None:
+    """guild-id KV loads OK but value is non-numeric → ConfigError, not
+    the generic 'failed to load' wording.
+
+    Distinguishes two failure modes for ``int(load_secret("guild-id"))``:
+    1. ``load_secret`` itself raises → "failed to load" message (existing).
+    2. ``int(...)`` raises ``ValueError`` → secret WAS loaded; data is bad.
+       The error message must name the secret and the bad value, NOT claim
+       the secret could not be loaded (PR #40 feedback).
+    """
+    captured: list[logging.LogRecord] = []
+
+    class _CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    handler = _CapturingHandler()
+    seed_logger = logging.getLogger("mom_bot.reminders.seed")
+    seed_logger.disabled = False
+    seed_logger.addHandler(handler)
+    seed_logger.setLevel(logging.DEBUG)
+
+    bad_value = "not-a-snowflake"
+
+    def _secret_bad_guild_id(name: str) -> str:
+        if name == "guild-id":
+            return bad_value
+        return _secret_side_effect(name)
+
+    try:
+        with patch(
+            "mom_bot.reminders.seed.load_secret",
+            side_effect=_secret_bad_guild_id,
+        ):
+            with pytest.raises(Exception) as exc_info:
+                _maybe_seed_reminders(session, mock_bot)
+    finally:
+        seed_logger.removeHandler(handler)
+
+    # Must raise ConfigError, not ValueError.
+    assert exc_info.type.__name__ == "ConfigError"
+
+    # The message must name the secret and the bad value.
+    error_str = str(exc_info.value)
+    assert "guild-id" in error_str
+    assert bad_value in error_str
+
+    # The message must NOT use the "failed to load" wording (that phrase
+    # belongs to the KV-unreachable path, not the bad-value path).
+    assert "failed to load" not in error_str.lower()
+
+    # A CRITICAL log must have been emitted.
+    critical_records = [r for r in captured if r.levelname == "CRITICAL"]
+    assert len(critical_records) >= 1
+
+    # No rows should have been inserted.
+    count = session.scalar(select(func.count(Reminder.id)))
+    assert count == 0

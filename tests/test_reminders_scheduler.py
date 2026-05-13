@@ -798,6 +798,120 @@ async def test_null_role_mention_id_sends_bare_message() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Role mention — allowed_mentions + message prefix (#51)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_role_mention_id_set_prepends_markup_and_passes_allowed_mentions() -> None:
+    """When role_mention_id is set, message starts with <@&id> prefix.
+
+    Also verifies that channel.send is called with
+    ``allowed_mentions=discord.AllowedMentions(roles=True)`` so the ping
+    actually notifies guild members in that role (not just renders visually).
+    Without ``allowed_mentions``, Discord silently suppresses the notification
+    even though the markup renders — this was the silent-failure mode noted in
+    issue #51.
+    """
+    engine = _make_engine()
+    with Session(engine) as s:
+        _seed_reminder(
+            s,
+            weekday=_TUESDAY_0700.weekday(),
+            role_mention_id=_ROLE_ID,
+            name="HydraWithRole",
+        )
+
+    channel = FakeChannel(_CHANNEL_ID)
+    bot = FakeBot(ready=True)
+    bot.add_channel(channel)
+    scheduler = _make_scheduler(bot, engine, tick_seconds=0.05)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.08)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    channel.send.assert_called_once()
+    call_args = channel.send.call_args
+
+    # The first positional arg must start with the role-mention markup.
+    sent_message: str = call_args.args[0]
+    expected_prefix = f"<@&{_ROLE_ID}>"
+    assert sent_message.startswith(expected_prefix), (
+        f"Expected message to start with {expected_prefix!r}, " f"got: {sent_message!r}"
+    )
+
+    # channel.send must receive allowed_mentions=AllowedMentions(roles=True)
+    # so that Discord actually notifies members (not just renders the markup).
+    allowed = call_args.kwargs.get("allowed_mentions")
+    assert allowed is not None, (
+        "channel.send was called without allowed_mentions= kwarg — "
+        "Discord will suppress the role notification even though the "
+        "markup renders visually."
+    )
+    assert isinstance(
+        allowed, discord.AllowedMentions
+    ), f"Expected discord.AllowedMentions, got {type(allowed)!r}"
+    assert (
+        allowed.roles is True
+    ), f"Expected AllowedMentions(roles=True), got roles={allowed.roles!r}"
+
+
+@pytest.mark.asyncio
+async def test_null_role_mention_id_does_not_pass_allowed_mentions() -> None:
+    """When role_mention_id is None, send is called without allowed_mentions.
+
+    Graceful-degrade path: reminders without a role mention should post the
+    bare message and NOT include an allowed_mentions kwarg (or at minimum,
+    must not include a role-mention prefix in the message body).
+    """
+    engine = _make_engine()
+    with Session(engine) as s:
+        _seed_reminder(
+            s,
+            weekday=_TUESDAY_0700.weekday(),
+            role_mention_id=None,
+            name="NoRole",
+        )
+
+    channel = FakeChannel(_CHANNEL_ID)
+    bot = FakeBot(ready=True)
+    bot.add_channel(channel)
+    scheduler = _make_scheduler(bot, engine, tick_seconds=0.05)
+
+    with time_machine.travel(_TUESDAY_0700, tick=False):
+        task = asyncio.create_task(scheduler.run())
+        await asyncio.sleep(0.08)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    channel.send.assert_called_once()
+    call_args = channel.send.call_args
+
+    # No role-mention markup in the message body.
+    sent_message: str = call_args.args[0]
+    assert "<@&" not in sent_message, (
+        f"Expected no role-mention prefix when role_mention_id is None, " f"got: {sent_message!r}"
+    )
+
+    # allowed_mentions kwarg must not include roles=True.
+    allowed = call_args.kwargs.get("allowed_mentions")
+    if allowed is not None:
+        # If caller passes AllowedMentions at all, roles must not be True.
+        assert not (isinstance(allowed, discord.AllowedMentions) and allowed.roles is True), (
+            "channel.send should not enable role pings when " "role_mention_id is None"
+        )
+
+
+# ---------------------------------------------------------------------------
 # UTC-midnight date-attribution (plan § 12)
 # ---------------------------------------------------------------------------
 
