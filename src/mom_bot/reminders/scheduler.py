@@ -243,10 +243,12 @@ class ReminderScheduler:
         allowed_mentions: discord.AllowedMentions | None = None
         if reminder.role_mention_id is not None:
             message = f"<@&{reminder.role_mention_id}> {message}"
-            # AllowedMentions(roles=True) is required so Discord actually
-            # delivers the notification to role members.  Without it the
-            # markup renders visually but no ping fires — silent failure
-            # mode documented in issue #51.
+            # Without AllowedMentions(roles=True), Discord renders the
+            # <@&id> markup as a clickable mention visually, but suppresses
+            # the actual ping/notification to role members — this is
+            # Discord's safe-default behavior to prevent runaway role pings.
+            # We explicitly opt in only when role_mention_id IS NOT NULL,
+            # matching the per-env configuration intent from KV (#51).
             allowed_mentions = discord.AllowedMentions(roles=True)
 
         try:

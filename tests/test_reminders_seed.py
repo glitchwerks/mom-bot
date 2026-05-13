@@ -418,3 +418,71 @@ def test_seed_role_not_found_in_guild_logs_critical_and_raises(
     # No rows should have been inserted.
     count = session.scalar(select(func.count(Reminder.id)))
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# KV secret value validation — ValueError vs ConfigError distinction (#40)
+# ---------------------------------------------------------------------------
+
+
+def test_seed_guild_id_non_numeric_raises_config_error_not_failed_to_load(
+    session: Session,
+    mock_bot: MagicMock,
+) -> None:
+    """guild-id KV loads OK but value is non-numeric → ConfigError, not
+    the generic 'failed to load' wording.
+
+    Distinguishes two failure modes for ``int(load_secret("guild-id"))``:
+    1. ``load_secret`` itself raises → "failed to load" message (existing).
+    2. ``int(...)`` raises ``ValueError`` → secret WAS loaded; data is bad.
+       The error message must name the secret and the bad value, NOT claim
+       the secret could not be loaded (PR #40 feedback).
+    """
+    captured: list[logging.LogRecord] = []
+
+    class _CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    handler = _CapturingHandler()
+    seed_logger = logging.getLogger("mom_bot.reminders.seed")
+    seed_logger.disabled = False
+    seed_logger.addHandler(handler)
+    seed_logger.setLevel(logging.DEBUG)
+
+    bad_value = "not-a-snowflake"
+
+    def _secret_bad_guild_id(name: str) -> str:
+        if name == "guild-id":
+            return bad_value
+        return _secret_side_effect(name)
+
+    try:
+        with patch(
+            "mom_bot.reminders.seed.load_secret",
+            side_effect=_secret_bad_guild_id,
+        ):
+            with pytest.raises(Exception) as exc_info:
+                _maybe_seed_reminders(session, mock_bot)
+    finally:
+        seed_logger.removeHandler(handler)
+
+    # Must raise ConfigError, not ValueError.
+    assert exc_info.type.__name__ == "ConfigError"
+
+    # The message must name the secret and the bad value.
+    error_str = str(exc_info.value)
+    assert "guild-id" in error_str
+    assert bad_value in error_str
+
+    # The message must NOT use the "failed to load" wording (that phrase
+    # belongs to the KV-unreachable path, not the bad-value path).
+    assert "failed to load" not in error_str.lower()
+
+    # A CRITICAL log must have been emitted.
+    critical_records = [r for r in captured if r.levelname == "CRITICAL"]
+    assert len(critical_records) >= 1
+
+    # No rows should have been inserted.
+    count = session.scalar(select(func.count(Reminder.id)))
+    assert count == 0

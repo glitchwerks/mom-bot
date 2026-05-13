@@ -80,6 +80,40 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _load_int_secret(secret_name: str) -> int:
+    """Load a KV secret and convert it to an integer snowflake.
+
+    Wraps :func:`~mom_bot.config.load_secret` with an explicit
+    :exc:`ValueError` guard so callers receive a :class:`ConfigError` with
+    a clear message when the secret value is non-numeric, rather than an
+    opaque :exc:`ValueError` from ``int()``.
+
+    Args:
+        secret_name: The Key Vault secret name to load (without env prefix —
+            :func:`~mom_bot.config.load_secret` adds that automatically).
+
+    Returns:
+        The integer value of the secret.
+
+    Raises:
+        ConfigError: If the secret value is present but cannot be parsed as
+            an integer (``ValueError``), or if
+            :func:`~mom_bot.config.load_secret` raises for any other reason.
+    """
+    raw = load_secret(secret_name)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        _logger.critical(
+            "_maybe_seed_reminders: KV secret %r is not a valid integer " "snowflake: got %r",
+            secret_name,
+            raw,
+        )
+        raise ConfigError(
+            message=(f"KV secret {secret_name!r} is not a valid integer " f"snowflake: got {raw!r}")
+        ) from exc
+
+
 def _resolve_role(
     guild: discord.Guild,
     role_name: str,
@@ -110,7 +144,7 @@ def _resolve_role(
             guild.id,
         )
         raise ConfigError(
-            message=(f"Reminder mention role '{role_name}' not found in " f"guild '{guild.name}'")
+            message=f"Reminder mention role '{role_name}' not found in guild '{guild.name}'"
         )
     return role
 
@@ -199,9 +233,13 @@ def _maybe_seed_reminders(
     _logger.info("_maybe_seed_reminders: table empty; seeding Hydra + Chimera")
 
     try:
-        guild_id = int(load_secret("guild-id"))
+        guild_id = _load_int_secret("guild-id")
         channel_name = load_secret("reminder-channel-name")
         role_name = load_secret("reminder-mention-role-name")
+    except ConfigError:
+        # ConfigError already logged (either by _load_int_secret for a
+        # bad-value path, or by load_secret for a missing-secret path).
+        raise
     except Exception as exc:
         secret_name = getattr(exc, "secret_name", "unknown")
         _logger.critical(
