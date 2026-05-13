@@ -170,10 +170,13 @@ class MomBot(discord.Client):
         bot's lifetime — the trailing ``await scheduler.run()`` is the main
         scheduler loop, not just an init step.
 
-        The seed step reads ``reminder-channel-name`` from Key Vault and
-        resolves it to a Discord channel snowflake by looking up the channel
-        by name in ``self.guilds[0].text_channels`` (#47).  Resolution
-        happens once on first boot; the snowflake is stored in the DB.
+        The seed step reads ``guild-id`` and ``reminder-channel-name`` from
+        Key Vault and resolves the channel name to a snowflake by calling
+        ``bot.get_guild(int(guild_id)).text_channels`` (#47, #49).  Guild
+        selection is deterministic — the ``guild-id`` KV secret picks the
+        right guild even when the bot account is a member of multiple guilds
+        simultaneously.  Resolution happens once on first boot; the snowflake
+        is stored in the DB.
 
         Any unexpected exception is logged at CRITICAL with full traceback
         and re-raised so the task ends in an exceptional state — important
