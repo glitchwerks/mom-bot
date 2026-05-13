@@ -39,17 +39,23 @@ Channel resolution (#47):
   seed require a manual SQL UPDATE:
   ``UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'``
 
+Role resolution (#51):
+
+- The KV secret ``reminder-mention-role-name`` stores the role name as a
+  plain string (e.g. ``"Member"``).
+- At first boot, the function resolves that name to a snowflake via
+  ``discord.utils.get(guild.roles, name=role_name)`` where ``guild`` is
+  the result of the guild-resolution step above.
+- The resolved snowflake is stored in the ``role_mention_id`` DB column.
+- The resolution happens once — role renames after the first successful
+  seed require a manual SQL UPDATE:
+  ``UPDATE reminders SET role_mention_id = <new-snowflake> WHERE name = '<X>'``
+- If the KV secret is missing or the named role is not found in the guild,
+  the function logs CRITICAL and raises :class:`ConfigError` — same control
+  flow as channel-not-found.
+
 Message templates are verbatim copies from ``clan_reminders.py:L128-L132``
 (Hydra) and ``L141-L145`` (Chimera) per the plan's pre-work checklist.
-
-.. note::
-
-    ``role_mention_id`` is intentionally ``None`` for both seeded rows
-    (#45). Reminders post to a dedicated channel and do not ping any role —
-    the channel itself is the audience signal.  If a future need arises to
-    re-add a mention for a specific reminder, use
-    ``UPDATE reminders SET role_mention_id = <snowflake> WHERE name = '<X>'``
-    without touching this function.
 """
 
 from __future__ import annotations
@@ -67,6 +73,47 @@ from mom_bot.reminders.models import Reminder
 __all__ = ["_maybe_seed_reminders"]
 
 _logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_role(
+    guild: discord.Guild,
+    role_name: str,
+) -> discord.Role:
+    """Resolve a role name to a :class:`discord.Role` within a guild.
+
+    Mirrors :func:`_resolve_channel` — uses ``discord.utils.get`` to find
+    the role by name, logs CRITICAL and raises :class:`ConfigError` if no
+    match is found.
+
+    Args:
+        guild: The Discord guild to search.
+        role_name: The human-readable role name to look up (e.g. ``"Member"``).
+
+    Returns:
+        The matching :class:`discord.Role` object.
+
+    Raises:
+        ConfigError: If no role with ``name == role_name`` exists in the
+            guild.
+    """
+    role = discord.utils.get(guild.roles, name=role_name)
+    if role is None:
+        _logger.critical(
+            "_maybe_seed_reminders: role %r not found in guild %r (id=%d)",
+            role_name,
+            guild.name,
+            guild.id,
+        )
+        raise ConfigError(
+            message=(f"Reminder mention role '{role_name}' not found in " f"guild '{guild.name}'")
+        )
+    return role
+
 
 # ---------------------------------------------------------------------------
 # Verbatim message templates (clan_reminders.py:L128-L132 and L141-L145)
@@ -96,7 +143,7 @@ def _maybe_seed_reminders(
 ) -> None:
     """Insert Hydra + Chimera reminder rows if the table is empty.
 
-    Reads two Key Vault secrets via :func:`~mom_bot.config.load_secret`
+    Reads three Key Vault secrets via :func:`~mom_bot.config.load_secret`
     (which applies the ``MOM_BOT_ENV`` prefix automatically):
 
     - ``guild-id`` — Discord guild (server) snowflake for this environment.
@@ -107,18 +154,17 @@ def _maybe_seed_reminders(
       both Hydra and Chimera reminders.  Resolved to a snowflake at first
       boot via ``discord.utils.get(guild.text_channels, name=channel_name)``
       within the guild identified by ``guild-id``.  Both reminders fire to
-      the same channel per env.
+      the same channel per env (#47).
+    - ``reminder-mention-role-name`` — Discord role name (string) to ping
+      when both Hydra and Chimera reminders fire.  Resolved to a snowflake
+      at first boot via ``discord.utils.get(guild.roles, name=role_name)``.
+      Both reminders ping the same role per env (#51).
 
     The resolved channel snowflake is written into the ``channel_id`` DB
-    column.  If the channel is renamed after first seed, use
+    column; the resolved role snowflake is written into ``role_mention_id``.
+    If either is renamed after the first seed, update with SQL:
     ``UPDATE reminders SET channel_id = <new-snowflake> WHERE name = '<X>'``
-    directly without re-seeding.
-
-    Both Hydra and Chimera seed with ``role_mention_id=None`` — reminders
-    post to the channel without pinging any role (#45).  If a future need
-    arises to split channels, either add per-reminder secrets and update this
-    function, or ``UPDATE reminders SET channel_id = ... WHERE name =
-    'Chimera'`` directly without re-seeding.
+    ``UPDATE reminders SET role_mention_id = <new-snowflake> WHERE name = '<X>'``
 
     Schedule:
 
@@ -131,13 +177,13 @@ def _maybe_seed_reminders(
         bot: The connected :class:`discord.Client` instance.  Must have
             already received the READY event so that
             :meth:`~discord.Client.get_guild` can resolve the guild from the
-            internal cache.  Used to resolve guild and channel name to a
-            snowflake.
+            internal cache.  Used to resolve guild, channel, and role names
+            to snowflakes.
 
     Raises:
         ConfigError: If any KV secret is missing, if the bot is not a member
-            of the configured guild, or if the named channel does not exist
-            in that guild.
+            of the configured guild, or if the named channel or role does not
+            exist in that guild.
         Exception: Any other exception raised by
             :func:`~mom_bot.config.load_secret` is logged at CRITICAL and
             re-raised so the process exits.
@@ -155,6 +201,7 @@ def _maybe_seed_reminders(
     try:
         guild_id = int(load_secret("guild-id"))
         channel_name = load_secret("reminder-channel-name")
+        role_name = load_secret("reminder-mention-role-name")
     except Exception as exc:
         secret_name = getattr(exc, "secret_name", "unknown")
         _logger.critical(
@@ -195,7 +242,13 @@ def _maybe_seed_reminders(
             message=f"Reminder channel '{channel_name}' not found in guild '{guild.name}'"
         )
 
+    # Resolve the mention role by name (#51).  Uses the same control flow
+    # as channel resolution: CRITICAL + ConfigError on not-found so the bot
+    # exits rather than seeding rows with a NULL role that was expected.
+    role = _resolve_role(guild, role_name)
+
     channel_id: int = channel.id
+    role_mention_id: int = role.id
 
     session.add_all(
         [
@@ -205,7 +258,7 @@ def _maybe_seed_reminders(
                 weekday=1,
                 fire_time_utc=datetime.time(7, 0, 0),
                 message_template=HYDRA_TEMPLATE,
-                role_mention_id=None,
+                role_mention_id=role_mention_id,
             ),
             Reminder(
                 name="Chimera",
@@ -213,13 +266,15 @@ def _maybe_seed_reminders(
                 weekday=2,
                 fire_time_utc=datetime.time(12, 0, 0),
                 message_template=CHIMERA_TEMPLATE,
-                role_mention_id=None,
+                role_mention_id=role_mention_id,
             ),
         ]
     )
     session.commit()
     _logger.info(
-        "_maybe_seed_reminders: seeded Hydra and Chimera (channel=%r → id=%d, no role mention)",
+        "_maybe_seed_reminders: seeded Hydra and Chimera " "(channel=%r → id=%d, role=%r → id=%d)",
         channel_name,
         channel_id,
+        role_name,
+        role_mention_id,
     )

@@ -47,6 +47,8 @@ from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
 _GUILD_ID = 999999999999999999
 _CHANNEL_ID = 111111111111111111
 _CHANNEL_NAME = "reminders"
+_ROLE_ID = 333444555666777888
+_ROLE_NAME = "Member"
 
 
 def _make_engine() -> Any:
@@ -71,19 +73,29 @@ class FakeChannel:
         self.send = AsyncMock()
 
 
+class FakeRole:
+    """Minimal discord.Role stand-in with a real name and id."""
+
+    def __init__(self, role_id: int, name: str = _ROLE_NAME) -> None:
+        """Initialise with role snowflake and name."""
+        self.id = role_id
+        self.name = name
+
+
 def _make_fake_guild(
     channel_id: int = _CHANNEL_ID,
     channel_name: str = _CHANNEL_NAME,
+    role_id: int = _ROLE_ID,
+    role_name: str = _ROLE_NAME,
 ) -> tuple[MagicMock, FakeChannel]:
     """Build a fake guild for patching ``bot.get_guild``.
 
     ``seed.py`` calls ``bot.get_guild(int(guild_id))`` (resolved from the
     ``guild-id`` KV secret) and then resolves the channel via
-    ``discord.utils.get(guild.text_channels, name=...)``.  We use a real
-    :class:`FakeChannel` instance (with a real ``.name`` string attribute)
-    so the comparison works correctly — a plain ``MagicMock`` without
-    ``spec=`` would return another mock for ``.name``, which will never
-    equal the channel name string.
+    ``discord.utils.get(guild.text_channels, name=...)`` and the role via
+    ``discord.utils.get(guild.roles, name=...)`` (#51).  We use real stub
+    instances (with real ``.name`` string attributes) so string comparisons
+    in ``discord.utils.get`` work correctly.
 
     ``get_guild`` is a regular method (not a property), so no
     ``PropertyMock`` is needed — patch directly with
@@ -94,9 +106,11 @@ def _make_fake_guild(
         ready to use as the ``return_value`` of ``bot.get_guild``.
     """
     fake_channel = FakeChannel(channel_id, channel_name)
+    fake_role = FakeRole(role_id, role_name)
 
     mock_guild = MagicMock(spec=discord.Guild)
     mock_guild.text_channels = [fake_channel]
+    mock_guild.roles = [fake_role]
     mock_guild.name = "fake-guild"
     mock_guild.id = _GUILD_ID
 
@@ -132,6 +146,7 @@ async def test_setup_hook_returns_promptly_without_gateway() -> None:
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
         "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
     }
 
     def fake_load_secret(name: str) -> str:
@@ -196,6 +211,7 @@ async def test_setup_hook_seeds_and_starts_scheduler() -> None:
     load_secret_values = {
         "guild-id": str(_GUILD_ID),
         "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
     }
 
     def fake_load_secret(name: str) -> str:

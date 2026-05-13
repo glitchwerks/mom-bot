@@ -240,11 +240,22 @@ class ReminderScheduler:
             return
 
         message = reminder.message_template
+        allowed_mentions: discord.AllowedMentions | None = None
         if reminder.role_mention_id is not None:
             message = f"<@&{reminder.role_mention_id}> {message}"
+            # AllowedMentions(roles=True) is required so Discord actually
+            # delivers the notification to role members.  Without it the
+            # markup renders visually but no ping fires — silent failure
+            # mode documented in issue #51.
+            allowed_mentions = discord.AllowedMentions(roles=True)
 
         try:
-            await channel.send(message)  # type: ignore[union-attr]
+            if allowed_mentions is not None:
+                await channel.send(  # type: ignore[union-attr]
+                    message, allowed_mentions=allowed_mentions
+                )
+            else:
+                await channel.send(message)  # type: ignore[union-attr]
             _logger.info(
                 "scheduler: fired reminder %r to channel %d on %s",
                 reminder.name,
