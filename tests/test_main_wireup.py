@@ -23,12 +23,24 @@ Design notes
   seed.py now resolves guild by ID (from the ``guild-id`` KV secret) rather
   than via ``bot.guilds[0]``, fixing non-deterministic guild selection when
   the bot account is a member of multiple guilds (#49).
+
+Exception-logging tests (issue #53)
+------------------------------------
+- ``test_reminder_task_exception_logs_critical``: a synthetic RuntimeError
+  raised by ``_maybe_seed_reminders`` must produce a CRITICAL log record
+  whose exc_info contains the RuntimeError and a traceback.
+- ``test_reminder_task_cancellation_does_not_log_critical``: cancelling the
+  task during ``await wait_until_ready`` must NOT emit a CRITICAL record.
+- ``test_done_callback_logs_exception``: the ``_log_task_exception`` module-
+  level callback must log CRITICAL when called with a failed task, exercising
+  the belt-and-suspenders safety net independently of the try/except.
 """
 
 from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -362,3 +374,210 @@ async def test_scheduler_fires_custom_reminder() -> None:
         await task
     except asyncio.CancelledError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Tests for exception-logging in the reminder-init task (issue #53)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reminder_task_exception_logs_critical(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A RuntimeError raised by _maybe_seed_reminders must log CRITICAL.
+
+    The try/except in ``_start_reminders_after_ready`` must:
+    - emit a CRITICAL log record at the moment of failure (not at GC time);
+    - include the full exc_info (exc type, value, traceback) so operators
+      can see the root cause in the live log stream.
+
+    The task re-raises after logging, so ``task.exception()`` holds the
+    original RuntimeError — verified here to confirm re-raise semantics.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    engine = _make_engine()
+    session_factory = _make_session_factory(engine)
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    def exploding_seed(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("synthetic seed failure")
+
+    bot = MomBot(intents=build_intents())
+    mock_guild, _ = _make_fake_guild(_CHANNEL_ID, _CHANNEL_NAME)
+
+    with caplog.at_level(logging.CRITICAL, logger="mom_bot.main"):
+        with (
+            patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+            patch("mom_bot.reminders.seed.load_secret", side_effect=fake_load_secret),
+            patch.object(bot, "wait_until_ready", new_callable=AsyncMock),
+            patch.object(bot.tree, "sync", new_callable=AsyncMock),
+            patch(
+                "mom_bot.main._build_session_factory",
+                return_value=session_factory,
+            ),
+            patch.object(bot, "get_guild", return_value=mock_guild),
+            patch(
+                "mom_bot.main._maybe_seed_reminders",
+                side_effect=exploding_seed,
+            ),
+        ):
+            await bot.setup_hook()
+            # Yield twice so the task runs past wait_until_ready and
+            # into the seed step (where it will raise).
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+    # Must have at least one CRITICAL record from mom_bot.main.
+    critical_records = [
+        r for r in caplog.records if r.levelno == logging.CRITICAL and r.name == "mom_bot.main"
+    ]
+    assert critical_records, (
+        "Expected a CRITICAL log record from mom_bot.main when _maybe_seed_reminders "
+        "raises, but none was emitted."
+    )
+
+    # The record's exc_info must capture the RuntimeError we raised.
+    rec = critical_records[0]
+    assert rec.exc_info is not None, "CRITICAL record must carry exc_info"
+    exc_type, exc_value, tb = rec.exc_info
+    assert exc_type is RuntimeError, f"Expected exc_type=RuntimeError, got {exc_type}"
+    assert "synthetic seed failure" in str(
+        exc_value
+    ), f"Expected error message in exc_value, got {exc_value!r}"
+    assert tb is not None, "CRITICAL record must carry a traceback"
+
+    # Re-raise semantics: task ends in exceptional state.
+    task = bot._reminder_task
+    assert task is not None
+    assert task.done(), "task must be done (raised) after seed exception"
+    assert not task.cancelled(), "task must not be cancelled — it raised"
+    assert isinstance(
+        task.exception(), RuntimeError
+    ), "task.exception() must be the original RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_reminder_task_cancellation_does_not_log_critical(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cancelling the reminder-init task must NOT emit a CRITICAL record.
+
+    asyncio.CancelledError is the normal shutdown signal — treating it as
+    an error would produce noisy false-positive alerts during bot restarts.
+    The try/except in ``_start_reminders_after_ready`` must re-raise
+    CancelledError without logging at CRITICAL.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    # wait_until_ready is NOT mocked — the task will block on it, which
+    # gives us a clean cancel point during the await.
+    bot = MomBot(intents=build_intents())
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    with caplog.at_level(logging.CRITICAL, logger="mom_bot.main"):
+        with (
+            patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+            patch.object(bot.tree, "sync", new_callable=AsyncMock),
+        ):
+            await bot.setup_hook()
+
+            # The task is now blocked on wait_until_ready (no mock, no
+            # gateway).  Cancel it and let the cancellation propagate.
+            task = bot._reminder_task
+            assert task is not None
+            task.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+    # Must be done and cancelled, not exceptioned.
+    assert task.done(), "task must be done after cancel"
+    assert task.cancelled(), "task must be in cancelled state"
+
+    # No CRITICAL record should exist.
+    critical_records = [
+        r for r in caplog.records if r.levelno == logging.CRITICAL and r.name == "mom_bot.main"
+    ]
+    assert not critical_records, (
+        "Cancellation must NOT produce a CRITICAL log record; "
+        f"got: {[r.message for r in critical_records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_done_callback_logs_exception() -> None:
+    """_log_task_exception must log CRITICAL when the task ended with an exc.
+
+    This exercises the done-callback safety net (belt-and-suspenders) in
+    isolation — independent of the try/except in _start_reminders_after_ready.
+
+    Edge-case analysis: could an exception be raised *before* the try/except
+    in _start_reminders_after_ready installs?  The try/except wraps the
+    entire body of _start_reminders_after_ready starting from
+    ``await self.wait_until_ready()``.  There is no code before that first
+    ``await`` that could raise outside the try/except — the try block is the
+    very first statement.  Therefore the "exception before try/except installs"
+    path is structurally unreachable in _start_reminders_after_ready itself.
+
+    The done-callback is still a meaningful safety net for *other* background
+    tasks that may be added later and that do not have a try/except wrapper.
+    We test it here by constructing a bare Task that raises, bypassing
+    _start_reminders_after_ready entirely, and verifying the callback logs.
+    """
+    import logging
+
+    from mom_bot.main import _log_task_exception
+
+    logged_records: list[logging.LogRecord] = []
+
+    class _CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            logged_records.append(record)
+
+    handler = _CapturingHandler()
+    # Target the mom_bot.main logger that _log_task_exception uses.
+    logger = logging.getLogger("mom_bot.main")
+    logger.addHandler(handler)
+    original_disabled = logger.disabled
+    logger.disabled = False
+    try:
+
+        async def _raise() -> None:
+            raise RuntimeError("callback-path failure")
+
+        task: asyncio.Task[None] = asyncio.create_task(_raise())
+        # Wait for the task to complete (it will raise internally).
+        try:
+            await task
+        except RuntimeError:
+            pass
+
+        # Now invoke the callback as asyncio would (with the finished task).
+        _log_task_exception(task)
+
+    finally:
+        logger.removeHandler(handler)
+        logger.disabled = original_disabled
+
+    critical_records = [r for r in logged_records if r.levelno == logging.CRITICAL]
+    assert critical_records, "_log_task_exception must emit a CRITICAL record for a failed task"
+    rec = critical_records[0]
+    assert rec.exc_info is not None, "CRITICAL record must carry exc_info"
+    exc_type, exc_value, _tb = rec.exc_info
+    assert exc_type is RuntimeError
+    assert "callback-path failure" in str(exc_value)
