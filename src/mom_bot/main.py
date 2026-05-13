@@ -75,7 +75,7 @@ def _log_task_exception(task: asyncio.Task[object]) -> None:
 # Session factory (patchable in tests via mock of _build_session_factory)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_DB_URL = "sqlite:///./mom_bot.db"
+_DEFAULT_DB_URL = "sqlite:///./mom-bot.db"
 
 
 def _build_session_factory() -> sessionmaker[Session]:

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import configparser
+import logging.config
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 import sqlalchemy as sa
@@ -14,6 +18,41 @@ from alembic.script import ScriptDirectory
 # Windows dev machines and Linux CI runners.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _ALEMBIC_INI = str(_REPO_ROOT / "alembic.ini")
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped autouse fixture: prevent alembic from disabling loggers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _no_disable_existing_loggers() -> Any:
+    """Force ``disable_existing_loggers=False`` on every ``fileConfig`` call.
+
+    ``alembic.command.upgrade`` invokes ``migrations/env.py``, which calls
+    ``logging.config.fileConfig(alembic_ini)``.  The stdlib default for
+    ``disable_existing_loggers`` is ``True``, which sets ``.disabled = True``
+    on every logger that existed before the call — including ``mom_bot.main``.
+
+    When ``test_default_db_url_matches_alembic_ini`` (in this module) imports
+    ``mom_bot.main``, it registers that logger.  Any subsequent
+    ``command.upgrade`` call then silences it, causing
+    ``test_reminder_task_exception_logs_critical`` in ``test_main_wireup.py``
+    to see no CRITICAL records from ``caplog``.
+
+    This fixture wraps ``fileConfig`` so the ``disable_existing_loggers``
+    argument is always ``False``, without touching ``env.py`` or the
+    production logging configuration.
+    """
+    _real_fileConfig = logging.config.fileConfig
+
+    def _patched_fileConfig(fname: Any, *args: Any, **kwargs: Any) -> None:
+        """Delegate to real fileConfig with disable_existing_loggers=False."""
+        kwargs["disable_existing_loggers"] = False
+        _real_fileConfig(fname, *args, **kwargs)
+
+    with patch("logging.config.fileConfig", side_effect=_patched_fileConfig):
+        yield
 
 
 def _make_alembic_config(db_path: str) -> Config:
@@ -29,6 +68,30 @@ def _make_alembic_config(db_path: str) -> Config:
     cfg = Config(_ALEMBIC_INI)
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     return cfg
+
+
+def test_default_db_url_matches_alembic_ini() -> None:
+    """_DEFAULT_DB_URL in main.py matches alembic.ini's sqlalchemy.url.
+
+    Regression test for issue #55: the bot's fallback SQLite filename was
+    ``mom_bot.db`` (underscore) while alembic.ini used ``mom-bot.db`` (hyphen).
+    With MOM_BOT_DATABASE_URL unset, alembic would migrate one file and the
+    bot would open the other, causing missing-table errors at startup.
+
+    Uses configparser directly (not the alembic API) so this test has no
+    alembic import dependency and stays fast/pure.
+    """
+    from mom_bot.main import _DEFAULT_DB_URL
+
+    parser = configparser.ConfigParser()
+    parser.read(_ALEMBIC_INI)
+    alembic_url = parser.get("alembic", "sqlalchemy.url")
+
+    assert _DEFAULT_DB_URL == alembic_url, (
+        f"Mismatch: main._DEFAULT_DB_URL={_DEFAULT_DB_URL!r} "
+        f"but alembic.ini sqlalchemy.url={alembic_url!r}. "
+        "Both must use the same filename so alembic and the bot share one DB."
+    )
 
 
 def test_alembic_can_load_config() -> None:
