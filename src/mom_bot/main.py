@@ -48,6 +48,29 @@ _logger = logging.getLogger(__name__)
 # Recorded once at module import; used to compute uptime in /ping responses.
 _started_at: float = time.monotonic()
 
+
+def _log_task_exception(task: asyncio.Task[object]) -> None:
+    """Done-callback safety net: log CRITICAL if a background task raised.
+
+    Attached via :meth:`asyncio.Task.add_done_callback` to the reminder-init
+    task.  Handles the cases where an exception escapes the try/except in
+    :meth:`MomBot._start_reminders_after_ready` (belt-and-suspenders) and
+    where other future background tasks lack a try/except wrapper.
+
+    Args:
+        task: The completed :class:`asyncio.Task` being inspected.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _logger.critical(
+            "Background task %r died with exception",
+            task.get_name(),
+            exc_info=exc,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Session factory (patchable in tests via mock of _build_session_factory)
 # ---------------------------------------------------------------------------
@@ -127,6 +150,18 @@ class MomBot(discord.Client):
             self._start_reminders_after_ready(),
             name="reminder-init",
         )
+        # Belt-and-suspenders: BOTH this done-callback AND the try/except
+        # inside _start_reminders_after_ready will fire on a real exception,
+        # producing TWO CRITICAL log records for the same failure.  This is
+        # intentional — operator-observability redundancy (#53).  The inner
+        # try/except logs at the moment of failure (rich live-stream signal);
+        # this callback is a safety net for exception paths the try/except
+        # might miss in future code (e.g. if a nested except swallows the
+        # re-raise, or a BaseException subclass bypasses ``except Exception``).
+        # A maintainer who thinks the double-logging is a bug should consult
+        # issue #53 and run test_real_exception_logs_twice_belt_and_suspenders
+        # to confirm the behavior is intentionally locked.
+        self._reminder_task.add_done_callback(_log_task_exception)
 
     async def _start_reminders_after_ready(self) -> None:
         """Wait for gateway READY, then seed and run the scheduler loop.
@@ -140,23 +175,46 @@ class MomBot(discord.Client):
         by name in ``self.guilds[0].text_channels`` (#47).  Resolution
         happens once on first boot; the snowflake is stored in the DB.
 
+        Any unexpected exception is logged at CRITICAL with full traceback
+        and re-raised so the task ends in an exceptional state — important
+        for shutdown-hook awaiters and for the done-callback safety net
+        added in #53.
+
         Raises:
+            asyncio.CancelledError: Propagated without logging (normal
+                shutdown signal, not an error).
             mom_bot.config.ConfigError: If a required KV secret is absent,
                 the bot has no guilds, or the named channel is not found.
+                Logged at CRITICAL before re-raising.
+            Exception: Any other unexpected exception is logged at CRITICAL
+                before re-raising.
         """
-        await self.wait_until_ready()
+        try:
+            await self.wait_until_ready()
 
-        factory = _build_session_factory()
+            factory = _build_session_factory()
 
-        # Seed the reminder table on first boot from Key Vault (plan § 4).
-        # Pass self so seed.py can resolve the channel name → snowflake.
-        with factory() as session:
-            _maybe_seed_reminders(session, self)
+            # Seed the reminder table on first boot from Key Vault (plan § 4).
+            # Pass self so seed.py can resolve the channel name → snowflake.
+            with factory() as session:
+                _maybe_seed_reminders(session, self)
 
-        # Run the scheduler loop for the bot's lifetime (plan § 6).
-        scheduler = ReminderScheduler(self, factory)
-        _logger.info("Reminder scheduler started")
-        await scheduler.run()
+            # Run the scheduler loop for the bot's lifetime (plan § 6).
+            scheduler = ReminderScheduler(self, factory)
+            _logger.info("Reminder scheduler started")
+            await scheduler.run()
+        except asyncio.CancelledError:
+            raise  # shutdown signal — not an error, do not log
+        except Exception:
+            # Also re-raised so add_done_callback's _log_task_exception sees
+            # the exception.  Two CRITICAL records will appear in logs — see
+            # issue #53 and test_real_exception_logs_twice_belt_and_suspenders
+            # for rationale.
+            _logger.critical(
+                "Reminder init task failed; scheduler did not start",
+                exc_info=True,
+            )
+            raise
 
     async def on_ready(self) -> None:
         """Log connection details once the client is fully connected.
