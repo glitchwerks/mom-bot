@@ -150,9 +150,17 @@ class MomBot(discord.Client):
             self._start_reminders_after_ready(),
             name="reminder-init",
         )
-        # Belt-and-suspenders: log any unhandled exception via the done-
-        # callback as a safety net (#53).  The task body also has a
-        # try/except that logs at the moment of failure.
+        # Belt-and-suspenders: BOTH this done-callback AND the try/except
+        # inside _start_reminders_after_ready will fire on a real exception,
+        # producing TWO CRITICAL log records for the same failure.  This is
+        # intentional — operator-observability redundancy (#53).  The inner
+        # try/except logs at the moment of failure (rich live-stream signal);
+        # this callback is a safety net for exception paths the try/except
+        # might miss in future code (e.g. if a nested except swallows the
+        # re-raise, or a BaseException subclass bypasses ``except Exception``).
+        # A maintainer who thinks the double-logging is a bug should consult
+        # issue #53 and run test_real_exception_logs_twice_belt_and_suspenders
+        # to confirm the behavior is intentionally locked.
         self._reminder_task.add_done_callback(_log_task_exception)
 
     async def _start_reminders_after_ready(self) -> None:
@@ -198,6 +206,10 @@ class MomBot(discord.Client):
         except asyncio.CancelledError:
             raise  # shutdown signal — not an error, do not log
         except Exception:
+            # Also re-raised so add_done_callback's _log_task_exception sees
+            # the exception.  Two CRITICAL records will appear in logs — see
+            # issue #53 and test_real_exception_logs_twice_belt_and_suspenders
+            # for rationale.
             _logger.critical(
                 "Reminder init task failed; scheduler did not start",
                 exc_info=True,
