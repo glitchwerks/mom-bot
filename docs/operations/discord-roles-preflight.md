@@ -83,7 +83,7 @@ permissions reference.[^perms-ref]
 The full permissions reference (six configuration layers, scopes, intents, role-ordering caveat,
 and install URL persistence) is at `docs/discord-permissions-reference.md`.
 
-[^perms-ref]: Discord API — Permissions: https://discord.com/developers/docs/topics/permissions (fetched 2026-05-08 for the original reference doc; bit assignments are stable and version-independent for the permissions listed here).
+[^perms-ref]: Discord API — Permissions: https://docs.discord.com/developers/topics/permissions (fetched 2026-05-08 for the original reference doc; bit assignments are stable and version-independent for the permissions listed here).
 
 #### Verifying the current grant
 
