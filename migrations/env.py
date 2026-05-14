@@ -19,6 +19,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 import mom_bot.reminders.models  # noqa: F401 — registers Reminder + ReminderSent on Base.metadata
+import mom_bot.roles.models  # noqa: F401 — registers DayRoleMap on Base.metadata
+import mom_bot.sidecar.models  # noqa: F401 — registers MemberRoleSyncState on Base.metadata
 from mom_bot.db import Base  # noqa: E402 — must follow alembic context setup
 
 # ---------------------------------------------------------------------------
