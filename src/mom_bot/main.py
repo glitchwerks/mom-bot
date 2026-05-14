@@ -42,6 +42,7 @@ from mom_bot import __version__
 from mom_bot.config import load_secret
 from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
+from mom_bot.roles.seed import seed_day_role_map
 
 _logger = logging.getLogger(__name__)
 
@@ -220,11 +221,18 @@ class MomBot(discord.Client):
             raise
 
     async def on_ready(self) -> None:
-        """Log connection details once the client is fully connected.
+        """Log connection details and seed day-role map on gateway READY.
 
         Emits a structured INFO record with the bot user, guild count, member
         count, and raw intent bitfield value so operators can verify the
         gateway session at a glance.
+
+        Also seeds (or refreshes) the ``day_role_map`` table via
+        :func:`~mom_bot.roles.seed.seed_day_role_map`.  The seed is wrapped in
+        a broad ``try/except`` so a transient failure (e.g. KV unavailable,
+        Discord API blip) does not bring down the bot — Discord can call
+        ``on_ready`` multiple times across reconnects, and missing one seed
+        cycle is preferable to crashing.
         """
         member_count = sum(g.member_count or 0 for g in self.guilds)
         _logger.info(
@@ -235,6 +243,16 @@ class MomBot(discord.Client):
             member_count,
             self.intents.value,
         )
+
+        # Seed day-role map — best-effort; failure is logged, not raised.
+        try:
+            factory = _build_session_factory()
+            await seed_day_role_map(self, factory)
+        except Exception:
+            _logger.exception(
+                "day_role_map seed failed; bot continues without updated "
+                "role map — will retry on next on_ready"
+            )
 
 
 def build_intents() -> discord.Intents:
