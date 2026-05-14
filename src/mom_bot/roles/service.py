@@ -233,6 +233,8 @@ async def _handle_assign(
     Returns:
         A :class:`RoleSyncResult` for the assign operation.
     """
+    import discord as _discord
+
     if day_number not in day_map:
         _logger.warning(
             "role_not_seeded correlation_id=%s guild_id=%s day_number=%s",
@@ -306,8 +308,6 @@ async def _handle_assign(
     removed_ids: list[int] = []
 
     if other_day_role is not None:
-        import discord as _discord
-
         try:
             await member.remove_roles(other_day_role)
             removed_ids.append(other_day_role_id)  # type: ignore[arg-type]
@@ -323,8 +323,6 @@ async def _handle_assign(
             remove_failed_403 = True
 
     # Now attempt the add.
-    import discord as _discord
-
     try:
         await member.add_roles(target_role)
     except _discord.Forbidden:
@@ -439,7 +437,29 @@ async def _handle_unassign(
             reason=REASON_ALREADY_LACKS_ROLE,
         )
 
-    await member.remove_roles(target_role)
+    import discord as _discord
+
+    try:
+        await member.remove_roles(target_role)
+    except _discord.Forbidden:
+        _logger.warning(
+            "remove_roles_forbidden correlation_id=%s discord_id=%s " "role_id=%s day_number=%s",
+            correlation_id,
+            discord_id,
+            target_role_id,
+            day_number,
+        )
+        _maybe_emit_hierarchy_loss(
+            guild=guild,
+            role_id=target_role_id,
+            discord_id=discord_id,
+            correlation_id=correlation_id,
+        )
+        return RoleSyncResult(
+            status="failed",
+            added=[],
+            removed=[],
+        )
     return RoleSyncResult(
         status="applied",
         added=[],

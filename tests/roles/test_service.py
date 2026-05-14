@@ -607,6 +607,76 @@ async def test_assign_add_forbidden_returns_failed(
 
 
 # ---------------------------------------------------------------------------
+# Failed — remove_roles raises Forbidden during unassign
+# ---------------------------------------------------------------------------
+
+
+async def test_unassign_remove_forbidden_returns_failed(
+    seeded_factory: sessionmaker[Session],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unassign; remove_roles raises Forbidden → failed.
+
+    Verifies that when ``Member.remove_roles`` raises
+    ``discord.Forbidden`` during an unassign operation the service
+    returns ``status="failed"`` with empty ``added`` and ``removed``
+    lists, and that ``_maybe_emit_hierarchy_loss`` is invoked (checked
+    via the dedup set being populated in the service module).
+
+    Args:
+        seeded_factory: Session factory pre-seeded with Day 1 and
+            Day 2 rows.
+        caplog: pytest log-capture fixture.
+    """
+    from mom_bot.roles import service as svc_module
+    from mom_bot.roles.service import apply_day_role
+
+    # Snapshot and clear the dedup set so a fresh hierarchy-loss event
+    # can fire; restore after the test to avoid leaking state.
+    snapshot = set(svc_module._hierarchy_loss_emitted)
+    svc_module._hierarchy_loss_emitted.clear()
+    try:
+        role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1", position=15)
+        role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=3)
+        member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
+        member.remove_roles = AsyncMock(
+            side_effect=discord.Forbidden(
+                MagicMock(status=403),
+                "Missing Permissions",
+            )
+        )
+        # Bot top role is below the target role — hierarchy violation.
+        bot_top = _make_bot_role(position=10)
+        guild = _make_guild(
+            member=member,
+            roles=[role_day1, role_day2],
+            bot_top_role=bot_top,
+        )
+
+        with caplog.at_level(logging.ERROR, logger="mom_bot.roles.service"):
+            result = await apply_day_role(
+                guild=guild,
+                discord_id=_MEMBER_DISCORD_ID,
+                action="unassign",
+                day_number=1,
+                correlation_id=_CORRELATION_ID,
+                session_factory=seeded_factory,
+            )
+
+        assert result.status == "failed"
+        assert result.added == []
+        assert result.removed == []
+
+        # _maybe_emit_hierarchy_loss was invoked — the role_id should have
+        # been added to the dedup set (since position 15 >= bot top 10).
+        assert _ROLE_ID_DAY1 in svc_module._hierarchy_loss_emitted
+    finally:
+        # Restore pre-test state so downstream tests are unaffected.
+        svc_module._hierarchy_loss_emitted.clear()
+        svc_module._hierarchy_loss_emitted.update(snapshot)
+
+
+# ---------------------------------------------------------------------------
 # Contract validation — assign with day_number=None
 # ---------------------------------------------------------------------------
 
@@ -647,7 +717,7 @@ async def test_assign_with_none_day_number_raises_value_error(
 # ---------------------------------------------------------------------------
 
 
-async def test_preflight_all_ok_logs_summary(
+def test_preflight_all_ok_logs_summary(
     seeded_factory: sessionmaker[Session],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -688,7 +758,7 @@ async def test_preflight_all_ok_logs_summary(
 # ---------------------------------------------------------------------------
 
 
-async def test_preflight_hierarchy_violation_raises_config_error(
+def test_preflight_hierarchy_violation_raises_config_error(
     seeded_factory: sessionmaker[Session],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -733,7 +803,7 @@ async def test_preflight_hierarchy_violation_raises_config_error(
 # ---------------------------------------------------------------------------
 
 
-async def test_preflight_missing_role_logs_warning(
+def test_preflight_missing_role_logs_warning(
     seeded_factory: sessionmaker[Session],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
