@@ -68,7 +68,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
   name: containerAppName
   location: location
   identity: {
-    type: 'SystemAssigned, UserAssigned'
+    type: 'UserAssigned'
     userAssignedIdentities: {
       '${managedIdentityId}': {}
     }
