@@ -967,9 +967,7 @@ class TestConcurrentRequestSerialization:
             )
             transport = httpx.ASGITransport(app=_app)
             with patch("mom_bot.sidecar.app.apply_day_role", side_effect=_mock_apply):
-                async with httpx.AsyncClient(
-                    transport=transport, base_url="http://test"
-                ) as ac:
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
                     r1, r2 = await asyncio.gather(
                         ac.post(
                             "/api/internal/role-sync",
@@ -1075,9 +1073,9 @@ class TestMalformedStoredJson:
                     )
 
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        assert mock_service.call_count == 1, (
-            "apply_day_role should be called once (fresh-write after cache miss)"
-        )
+        assert (
+            mock_service.call_count == 1
+        ), "apply_day_role should be called once (fresh-write after cache miss)"
 
         # An ERROR log describing the corruption must have been emitted.
         assert any(

@@ -309,9 +309,7 @@ def build_app(
                         # a cache miss and fall through to the fresh-write path.
                         try:
                             stored_added = json.loads(stored.last_response_added)
-                            stored_removed = json.loads(
-                                stored.last_response_removed
-                            )
+                            stored_removed = json.loads(stored.last_response_removed)
                         except json.JSONDecodeError:
                             _logger.error(
                                 "role_sync_json_corrupt correlation_id=%s "
