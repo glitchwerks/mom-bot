@@ -5,6 +5,7 @@
 **Contract spec (canonical):** `siege-web/docs/webhooks/day-role-sync.md` (delivered by sub-issue **D2** below). Both repos reference this spec as the single source of truth for the wire contract; this plan covers mom-bot's implementation as a **conforming receiver** of that contract.
 **Created:** 2026-05-13
 **Revised:** 2026-05-13 (round 2 inquisitor charges resolved; bot-agnostic generalization applied)
+**Committed:** 2026-05-15 (retrospective commit after A2 #68, A3 #69, B1 #70, B2 #71, D1 #73 merged)
 **Status:** GREENLIT for implementation (2 inquisitor passes complete per CLAUDE.md mandate)
 **Architecture:** Locked by `glitchwerks/mom-bot#6` issue body (edited 2026-05-13). This plan decomposes that architecture into discrete tasks; it does not redesign it.
 
@@ -207,7 +208,7 @@ After reading the three service handlers (`services/siege_members.py:42-108`, `s
 
 The current `glitchwerks/siege-web#323` body was filed before this plan locked the architecture and is mom-bot-coupled. **Tier C cannot begin until #323's body has been edited to match the bot-agnostic shape below.** This is a tier-C precondition.
 
-The router will paste the following as the new issue body via `gh issue edit 323 --body-file ...` after this plan lands.
+> **Historical note:** the router pasted the following as the new issue body via `gh issue edit 323 --body-file ...` after this plan locked. The future-tense phrasing below is preserved as historical instruction; the action has been executed.
 
 ### Replacement issue body (paste verbatim)
 
@@ -326,6 +327,8 @@ _Revised 2026-05-13 — body rewritten to be bot-agnostic and to reference the c
 ---
 
 ## 9. Pending #6 issue body updates (for router action after plan lands)
+
+> **Historical note:** these were instructions for the router agent at plan-locking time. The updates have since been executed against #6; the future-tense phrasing below is preserved for provenance.
 
 The router should update `glitchwerks/mom-bot#6` after this plan lands to reflect the bot-agnostic shape and reference the canonical contract spec doc (D2). Specifically:
 
