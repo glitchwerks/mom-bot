@@ -12,7 +12,9 @@ permissions:
 
 jobs:
   review:
-    uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@1528c7cde177d9e0d1593976f5824323ec169571  # v2.6.1
+    # SPIKE-261: pinned to spike SHA — revert to @v2 after measurement captured.
+    uses: glitchwerks/github-actions/.github/workflows/claude-pr-review.yml@8fd48f927dc01ca73e8f84eba5c6440408e970a9
     with:
       authorized_users: cbeaulieu-gt
+      spike_diagnostics: 'true'
     secrets: inherit
