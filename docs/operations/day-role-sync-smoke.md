@@ -210,11 +210,9 @@ The `partial` response path is covered by unit tests (via mocked `discord.Forbid
 `tests/`) but cannot be triggered against the live Discord API without either corrupting the
 hierarchy or adding the test seam.
 
-**To file:** Before this smoke scenario can be exercised end-to-end, the test seam must be
-implemented. File a new issue with:
-- title: `chore(epic-2-6): add MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID dev test seam`
-- body: reference this smoke step and issue #66 AC "Partial-response smoke"
-- assign to the mom-bot v1.0 milestone
+**Tracked in [#74](https://github.com/glitchwerks/mom-bot/issues/74).** Once that ships, the
+seam will be set via the bot's `MOM_BOT_FORCE_PARTIAL_FOR_DISCORD_ID` env var; rerun this
+scenario then.
 
 **What a partial state looks like in practice (documented for operator awareness):**
 
