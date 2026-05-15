@@ -7,10 +7,11 @@
 // - Ingress disabled — the Discord bot is outbound-only for v1.0. The sidecar
 //   /api/internal/role-sync endpoint (Epic 2.6) will re-enable ingress when it
 //   lands; keeping it off now is smallest blast radius.
-// - System-assigned + user-assigned MI both attached — system-assigned is the
-//   default identity for Azure SDK calls; user-assigned (mi-mom-bot) is bound
-//   explicitly for Key Vault via AZURE_CLIENT_ID env var so DefaultAzureCredential
-//   picks it up unambiguously in multi-MI environments.
+// - User-assigned MI only (mi-mom-bot) — attached as the sole identity so
+//   DefaultAzureCredential unambiguously selects it for Key Vault access.
+//   SystemAssigned was previously also attached but caused the SDK to default
+//   to the empty SystemAssigned principal (no role assignments) → KV 403s.
+//   See #81 for the diagnosis.
 // - Single replica (scale 0-1) — SQLite + WAL requires single writer.
 //   See framework plan § Confirmed design decisions.
 //
@@ -151,6 +152,3 @@ resource roleAssignmentGHA 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 @description('Fully qualified domain name of the Container App (empty when ingress disabled).')
 output fqdn string = ca.properties.configuration.?ingress.?fqdn ?? ''
-
-@description('System-assigned principal ID of the Container App.')
-output systemAssignedPrincipalId string = ca.identity.principalId
