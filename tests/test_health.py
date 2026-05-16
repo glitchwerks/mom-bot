@@ -121,7 +121,11 @@ async def test_healthz_returns_200_at_boundary() -> None:
 
 @pytest.mark.asyncio
 async def test_start_health_server_starts_and_stops() -> None:
-    """start_health_server runs a server that can be cleanly shut down."""
+    """start_health_server runs a server that can be cleanly shut down.
+
+    Exercises both the startup path (``runner.setup`` + ``site.start``) and
+    the shutdown path (``runner.cleanup``), verifying all three are awaited.
+    """
     site_mock = AsyncMock()
     runner_mock = AsyncMock()
     runner_mock.setup = AsyncMock()
@@ -140,3 +144,42 @@ async def test_start_health_server_starts_and_stops() -> None:
     site_mock.start.assert_awaited_once()
     assert runner is runner_mock
     assert site is site_mock
+
+    # Exercise the shutdown path — caller is responsible for cleanup.
+    await runner.cleanup()
+    runner_mock.cleanup.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — start_health_server cleans up runner if TCPSite.start() raises
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_health_server_cleans_up_runner_on_site_start_failure() -> None:
+    """runner.cleanup() is called when TCPSite.start() raises.
+
+    Verifies the error-path resource-management fix from PR #88: if
+    ``TCPSite.start()`` raises (e.g. ``OSError: address already in use``),
+    ``AppRunner`` resources must not be leaked.  The implementation must
+    call ``await runner.cleanup()`` before re-raising the exception.
+    """
+    site_mock = AsyncMock()
+    site_mock.start = AsyncMock(side_effect=OSError("address already in use"))
+    runner_mock = AsyncMock()
+    runner_mock.setup = AsyncMock()
+    runner_mock.cleanup = AsyncMock()
+
+    mock_site_cls = MagicMock(return_value=site_mock)
+    mock_runner_cls = MagicMock(return_value=runner_mock)
+
+    with (
+        patch("mom_bot.health.web.AppRunner", mock_runner_cls),
+        patch("mom_bot.health.web.TCPSite", mock_site_cls),
+    ):
+        with pytest.raises(OSError, match="address already in use"):
+            await health_mod.start_health_server(host="127.0.0.1", port=18080)
+
+    # runner.setup ran before the error; cleanup must have been awaited.
+    runner_mock.setup.assert_awaited_once()
+    runner_mock.cleanup.assert_awaited_once()

@@ -31,7 +31,6 @@ a different port), this module continues to bind 8080 without conflict.
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from aiohttp import web
 
@@ -79,7 +78,7 @@ def record_heartbeat() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def healthz_handler(request: Any) -> web.Response:
+async def healthz_handler(request: web.Request) -> web.Response:
     """Handle ``GET /healthz`` — return 200 if scheduler is alive, 503 otherwise.
 
     Compares :data:`last_heartbeat` against :data:`HEARTBEAT_THRESHOLD_SECONDS`.
@@ -138,6 +137,10 @@ async def start_health_server(
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host, port)
-    await site.start()
+    try:
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+    except Exception:
+        await runner.cleanup()
+        raise
     return runner, site

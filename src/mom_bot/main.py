@@ -34,6 +34,7 @@ import os
 import time
 
 import discord
+from aiohttp import web
 from discord import app_commands
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -122,7 +123,7 @@ class MomBot(discord.Client):
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.guild: discord.Object | None = None
         self._reminder_task: asyncio.Task[None] | None = None
-        self._health_runner: object | None = None
+        self._health_runner: web.AppRunner | None = None
 
     async def setup_hook(self) -> None:
         """Sync slash commands and spawn the post-READY init task.
@@ -274,11 +275,8 @@ class MomBot(discord.Client):
         """
         if self._health_runner is not None:
             try:
-                from aiohttp import web as _web
-
-                if isinstance(self._health_runner, _web.AppRunner):
-                    await self._health_runner.cleanup()
-                    _logger.info("Health server shut down cleanly")
+                await self._health_runner.cleanup()
+                _logger.info("Health server shut down cleanly")
             except Exception:
                 _logger.warning("Health server shutdown encountered an error", exc_info=True)
         await super().close()
