@@ -29,7 +29,7 @@ import mom_bot.health as health_mod
 
 def _reset_heartbeat() -> None:
     """Reset the module-level last_heartbeat to its uninitialised sentinel."""
-    health_mod.last_heartbeat = 0.0
+    health_mod.last_heartbeat = None
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +88,9 @@ async def test_healthz_returns_503_when_heartbeat_stale() -> None:
 
 @pytest.mark.asyncio
 async def test_healthz_returns_503_when_never_set() -> None:
-    """Handler returns 503 when last_heartbeat has never been recorded (0.0)."""
+    """Handler returns 503 when last_heartbeat has never been recorded (None)."""
     _reset_heartbeat()
-    assert health_mod.last_heartbeat == 0.0
+    assert health_mod.last_heartbeat is None
 
     request = MagicMock()
     response = await health_mod.healthz_handler(request)
@@ -115,7 +115,42 @@ async def test_healthz_returns_200_at_boundary() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 6 — start_health_server starts and can be shut down
+# Test 6 — /healthz returns 200 at boundary when monotonic is small (CI repro)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_healthz_returns_200_at_boundary_with_small_monotonic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Handler returns 200 when monotonic is small and heartbeat is 59 s old.
+
+    Regression test for the CI failure on PR #88.  GitHub-hosted Linux runners
+    have a small ``time.monotonic()`` value (seconds since boot).  The old
+    ``float = 0.0`` sentinel used ``last_heartbeat > 0.0`` as the "ever-set"
+    guard; with a 30 s uptime, ``monotonic() - 59`` evaluates to ``-29.0``,
+    which fails the guard and returns 503 instead of 200.
+
+    This test monkey-patches ``time.monotonic`` to return ``30.0`` (simulating
+    a 30 s uptime CI runner), sets ``last_heartbeat = monotonic() - 59``, and
+    asserts the handler returns 200.  With the ``Optional[float]`` sentinel
+    the guard is ``last_heartbeat is not None``, which is unaffected by the
+    sign of the stored value.
+    """
+    monkeypatch.setattr("mom_bot.health.time.monotonic", lambda: 30.0)
+    # 30.0 - 59.0 = -29.0 — was negative under old sentinel, triggering 503
+    health_mod.last_heartbeat = 30.0 - 59.0  # -29.0
+
+    request = MagicMock()
+    response = await health_mod.healthz_handler(request)
+
+    assert response.status == 200, (
+        f"Expected 200 when monotonic=30.0 and heartbeat is 59 s old, " f"got {response.status}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — start_health_server starts and can be shut down
 # ---------------------------------------------------------------------------
 
 
@@ -151,7 +186,7 @@ async def test_start_health_server_starts_and_stops() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 7 — start_health_server cleans up runner if TCPSite.start() raises
+# Test 9 — start_health_server cleans up runner if TCPSite.start() raises
 # ---------------------------------------------------------------------------
 
 

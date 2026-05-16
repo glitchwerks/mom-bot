@@ -6,10 +6,10 @@ is consumed by the Azure Container Apps liveness probe (httpGet type).
 
 Architecture
 ------------
-A module-level :data:`last_heartbeat` float records the monotonic timestamp
-of the most recent scheduler tick.  The scheduler calls
-:func:`record_heartbeat` at the top of every tick.  The HTTP handler
-:func:`healthz_handler` compares the elapsed time against
+A module-level :data:`last_heartbeat` records the monotonic timestamp of the
+most recent scheduler tick, or ``None`` when the scheduler has not yet ticked.
+The scheduler calls :func:`record_heartbeat` at the top of every tick.  The
+HTTP handler :func:`healthz_handler` compares the elapsed time against
 :data:`HEARTBEAT_THRESHOLD_SECONDS` (60 s) and returns:
 
 - ``200 OK`` — heartbeat is recent (scheduler alive).
@@ -57,9 +57,10 @@ HEARTBEAT_THRESHOLD_SECONDS: float = 60.0
 # ---------------------------------------------------------------------------
 
 #: Last monotonic timestamp when :func:`record_heartbeat` was called.
-#: Initialised to ``0.0`` (epoch of the monotonic clock) — a value that
-#: guarantees 503 until the scheduler ticks for the first time.
-last_heartbeat: float = 0.0
+#: ``None`` means the scheduler has never ticked — guarantees 503 until the
+#: first tick regardless of how small ``time.monotonic()`` is on the host
+#: (e.g. a freshly-booted CI runner whose uptime is < 60 s).
+last_heartbeat: float | None = None
 
 
 def record_heartbeat() -> None:
@@ -82,8 +83,11 @@ async def healthz_handler(request: web.Request) -> web.Response:
     """Handle ``GET /healthz`` — return 200 if scheduler is alive, 503 otherwise.
 
     Compares :data:`last_heartbeat` against :data:`HEARTBEAT_THRESHOLD_SECONDS`.
-    A value of ``0.0`` (never set) always produces 503 because the elapsed
-    time will be enormous relative to the threshold.
+    A value of ``None`` (never set) always produces 503.  A non-``None`` value
+    is safe to compare directly without a positive-value guard — the sentinel
+    distinction is now ``None`` vs. a real timestamp, not ``0.0`` vs. positive,
+    which was ambiguous on freshly-booted hosts where
+    ``time.monotonic() - threshold`` can be negative.
 
     Args:
         request: The aiohttp :class:`~aiohttp.web.Request` (unused — the
@@ -94,13 +98,14 @@ async def healthz_handler(request: web.Request) -> web.Response:
         ``{"status":"ok"}`` when alive, or status 503 and body
         ``{"status":"unhealthy"}`` when the heartbeat is stale or absent.
     """
-    elapsed = time.monotonic() - last_heartbeat
-    if last_heartbeat > 0.0 and elapsed < HEARTBEAT_THRESHOLD_SECONDS:
-        return web.Response(
-            status=200,
-            content_type="application/json",
-            text='{"status":"ok"}',
-        )
+    if last_heartbeat is not None:
+        elapsed = time.monotonic() - last_heartbeat
+        if elapsed < HEARTBEAT_THRESHOLD_SECONDS:
+            return web.Response(
+                status=200,
+                content_type="application/json",
+                text='{"status":"ok"}',
+            )
     return web.Response(
         status=503,
         content_type="application/json",
