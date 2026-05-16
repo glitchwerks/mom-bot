@@ -1,5 +1,10 @@
-// storage.bicep — Azure Storage Account + File Share + Container Apps SMB binding
-//                 for SQLite-on-AzureFile (SQLite stopgap, issue #87).
+// storage.bicep — Azure Storage Account + File Share for SQLite-on-AzureFile
+//                 (SQLite stopgap, issue #87).
+//
+// Scope: storage primitives only (Storage Account + File Share).
+// The Container Apps managed-environment storage binding is a child of the CAE
+// and lives in containerapp.bicep so that Bicep's dependency analysis can order
+// the binding before the container app's volumes[] reference automatically.
 //
 // Design choices:
 // - Standard_LRS: cheapest tier adequate for a single-region SQLite file store.
@@ -19,9 +24,6 @@
 
 @description('Azure region for the storage account.')
 param location string
-
-@description('Name of the Container Apps managed environment (used for the SMB binding).')
-param containerAppsEnvironmentName string
 
 @description('Optional override for the storage account name (3-24 chars, lowercase alphanumeric). Defaults to a deterministic derived name.')
 @minLength(3)
@@ -68,32 +70,8 @@ resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-0
 }
 
 // ---------------------------------------------------------------------------
-// Container Apps managed-environment storage binding (SMB)
-// ---------------------------------------------------------------------------
-
-resource cae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
-  name: containerAppsEnvironmentName
-}
-
-resource storageBinding 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
-  parent: cae
-  name: 'mom-bot-data-binding'
-  properties: {
-    azureFile: {
-      accountName: storageAccount.name
-      accountKey: storageAccount.listKeys().keys[0].value
-      shareName: fileShare.name
-      accessMode: 'ReadWriteOnce'
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Outputs
 // ---------------------------------------------------------------------------
 
-@description('Name of the Container Apps managed-environment storage binding. Pass to containerapp.bicep as storageBindingName.')
-output storageBindingName string = storageBinding.name
-
-@description('Name of the Storage Account. Use in az storage share snapshot create commands (Policy 2 runbook).')
+@description('Name of the Storage Account. Pass to containerapp.bicep as storageAccountName so it can create the CAE storage binding.')
 output storageAccountName string = storageAccount.name

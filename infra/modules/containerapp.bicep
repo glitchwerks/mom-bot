@@ -32,6 +32,10 @@
 // - Single replica (scale 0-1) — SQLite + WAL requires single writer.
 //   Policy 1 (issue #87): @allowed([1]) on maxReplicas makes the constraint
 //   load-bearing at Bicep build time.
+// - CAE storage binding lives here (not in storage.bicep) because the binding
+//   is a child of the CAE. Co-locating them gives Bicep a symbol reference
+//   (storageBinding.name) so the container app's volumes[] depends on the
+//   binding automatically — no dependsOn needed, no ARM validation race.
 //
 // Role assignments:
 // - mom-bot-gha (deploy pipeline) → Container Apps Contributor at RG scope
@@ -65,8 +69,14 @@ param ghaServicePrincipalObjectId string
 @description('URI of the Key Vault (e.g. https://kv-mombot-eastus2.vault.azure.net/). Used for KV-backed secret references.')
 param keyVaultUri string
 
-@description('Name of the Container Apps managed-environment storage binding (from storage.bicep output storageBindingName).')
-param storageBindingName string
+@description('Name of the Storage Account backing the AzureFile volume (from storage.bicep output storageAccountName).')
+param storageAccountName string
+
+@description('Name of the Container Apps managed-environment storage binding to create on the CAE.')
+param storageBindingName string = 'mom-bot-data-binding'
+
+@description('Name of the Azure File Share to bind (must match the share created in storage.bicep).')
+param fileShareName string = 'mom-bot-data'
 
 @description('Policy 1 (issue #87): single-writer enforcement. @allowed([1]) makes maxReplicas > 1 a hard Bicep build error, preventing accidental multi-replica deployments that would corrupt the SQLite DB.')
 @allowed([1])
@@ -89,6 +99,34 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
   properties: {
     // Consumption-only: no workloadProfiles block → defaults to Consumption.
     zoneRedundant: false
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Storage Account reference (existing — created by storage.bicep)
+// ---------------------------------------------------------------------------
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
+  name: storageAccountName
+  scope: resourceGroup()
+}
+
+// ---------------------------------------------------------------------------
+// CAE storage binding — child of the CAE, must exist before the Container App
+// references it in volumes[].storageName. Bicep derives the ordering
+// automatically via the storageBinding.name symbol reference below.
+// ---------------------------------------------------------------------------
+
+resource storageBinding 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+  parent: cae
+  name: storageBindingName
+  properties: {
+    azureFile: {
+      accountName: storageAccount.name
+      accountKey: storageAccount.listKeys().keys[0].value
+      shareName: fileShareName
+      accessMode: 'ReadWriteOnce'
+    }
   }
 }
 
@@ -127,7 +165,9 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'data'
           storageType: 'AzureFile'
-          storageName: storageBindingName
+          // Symbol reference — Bicep sees the dependency on storageBinding and
+          // ensures the binding is created before the container app is applied.
+          storageName: storageBinding.name
         }
       ]
       containers: [
