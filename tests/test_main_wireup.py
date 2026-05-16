@@ -53,6 +53,37 @@ from mom_bot.db import Base
 from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
 
 # ---------------------------------------------------------------------------
+# Autouse fixture — prevent port 8080 collision across all setup_hook tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def mock_health_server() -> Any:
+    """Patch start_health_server for every test in this module.
+
+    ``setup_hook`` calls ``start_health_server`` and stores the returned
+    ``(runner, site)`` tuple.  Without this patch, every test that calls
+    ``setup_hook()`` binds a real aiohttp server to port 8080.  When two
+    such tests run back-to-back (or concurrently on CI) the second bind
+    raises ``OSError: [Errno 98] address already in use``.
+
+    The mock returns a ``(runner_mock, site_mock)`` tuple that satisfies the
+    ``_health_runner = runner`` assignment in ``setup_hook`` and the
+    ``await runner.cleanup()`` call in ``MomBot.close()``.
+
+    Yields:
+        The ``AsyncMock`` that replaced ``start_health_server`` so individual
+        tests can assert on it (e.g., ``assert_awaited_once``).
+    """
+    runner_mock = MagicMock()
+    runner_mock.cleanup = AsyncMock()
+    site_mock = MagicMock()
+    health_mock = AsyncMock(return_value=(runner_mock, site_mock))
+    with patch("mom_bot.main.start_health_server", health_mock):
+        yield health_mock
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -733,3 +764,111 @@ async def test_done_callback_logs_exception() -> None:
     exc_type, exc_value, _tb = rec.exc_info
     assert exc_type is RuntimeError
     assert "callback-path failure" in str(exc_value)
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — health-server lifecycle wiring in setup_hook / close
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_hook_starts_health_server_and_stores_runner(
+    mock_health_server: AsyncMock,
+) -> None:
+    """setup_hook() must await start_health_server and store the runner on bot.
+
+    Verifies the health-server wiring introduced in PR #88:
+
+    1. ``start_health_server`` is awaited exactly once during ``setup_hook``.
+    2. The returned runner is stored on ``bot._health_runner`` so ``close()``
+       can call ``runner.cleanup()`` later.
+
+    The ``mock_health_server`` autouse fixture replaces ``start_health_server``
+    with an ``AsyncMock`` returning ``(runner_mock, site_mock)``.  This test
+    reaches into the fixture value to assert the exact runner stored on the bot
+    matches the mock's first return value.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch.object(bot.tree, "sync", new_callable=AsyncMock),
+    ):
+        await bot.setup_hook()
+
+    # start_health_server must have been awaited exactly once.
+    mock_health_server.assert_awaited_once()
+
+    # The runner returned by the mock must be stored on the bot.
+    expected_runner = mock_health_server.return_value[0]
+    assert bot._health_runner is expected_runner, (
+        "bot._health_runner must reference the runner returned by " "start_health_server"
+    )
+
+    # Clean up: cancel the reminder background task.
+    if bot._reminder_task is not None:
+        bot._reminder_task.cancel()
+        try:
+            await bot._reminder_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_close_calls_runner_cleanup(
+    mock_health_server: AsyncMock,
+) -> None:
+    """MomBot.close() must call runner.cleanup() on the stored health runner.
+
+    Verifies that the shutdown path introduced in PR #88 works end-to-end:
+
+    1. ``setup_hook`` stores the runner mock on ``bot._health_runner``.
+    2. ``await bot.close()`` calls ``await runner.cleanup()`` exactly once.
+
+    ``discord.Client.close`` is patched to avoid touching the gateway.
+    """
+    from mom_bot.main import MomBot, build_intents
+
+    load_secret_values = {
+        "guild-id": str(_GUILD_ID),
+        "reminder-channel-name": _CHANNEL_NAME,
+        "reminder-mention-role-name": _ROLE_NAME,
+    }
+
+    def fake_load_secret(name: str) -> str:
+        return load_secret_values[name]
+
+    bot = MomBot(intents=build_intents())
+
+    with (
+        patch("mom_bot.main.load_secret", side_effect=fake_load_secret),
+        patch.object(bot.tree, "sync", new_callable=AsyncMock),
+    ):
+        await bot.setup_hook()
+
+    # Cancel background task before close so it doesn't linger.
+    if bot._reminder_task is not None:
+        bot._reminder_task.cancel()
+        try:
+            await bot._reminder_task
+        except asyncio.CancelledError:
+            pass
+
+    runner_mock = mock_health_server.return_value[0]
+
+    # Patch super().close() so we don't touch the gateway.
+    with patch("discord.Client.close", new_callable=AsyncMock):
+        await bot.close()
+
+    runner_mock.cleanup.assert_awaited_once()

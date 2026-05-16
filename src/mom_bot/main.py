@@ -34,12 +34,14 @@ import os
 import time
 
 import discord
+from aiohttp import web
 from discord import app_commands
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot import __version__
 from mom_bot.config import load_secret
+from mom_bot.health import start_health_server
 from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
 from mom_bot.roles.seed import seed_day_role_map
@@ -106,6 +108,8 @@ class MomBot(discord.Client):
             :meth:`setup_hook` after ``guild-id`` is resolved from Key Vault.
         _reminder_task: The asyncio task running the reminder scheduler;
             stored to prevent garbage collection.
+        _health_runner: The aiohttp AppRunner for the /healthz server;
+            stored so :meth:`close` can shut it down cleanly.
     """
 
     def __init__(self, intents: discord.Intents) -> None:
@@ -119,6 +123,7 @@ class MomBot(discord.Client):
         self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.guild: discord.Object | None = None
         self._reminder_task: asyncio.Task[None] | None = None
+        self._health_runner: web.AppRunner | None = None
 
     async def setup_hook(self) -> None:
         """Sync slash commands and spawn the post-READY init task.
@@ -138,6 +143,12 @@ class MomBot(discord.Client):
             ValueError: If the stored guild-id cannot be cast to ``int``.
             discord.HTTPException: If the slash-command sync request fails.
         """
+        # Start the /healthz HTTP server before gateway connect so the ACA
+        # liveness probe can reach it as soon as the container is up.
+        runner, _site = await start_health_server()
+        self._health_runner = runner
+        _logger.info("Health server started on 0.0.0.0:8080")
+
         guild_id = int(load_secret("guild-id"))
         self.guild = discord.Object(id=guild_id)
         self.tree.copy_global_to(guild=self.guild)
@@ -253,6 +264,22 @@ class MomBot(discord.Client):
                 "day_role_map seed failed; bot continues without updated "
                 "role map — will retry on next on_ready"
             )
+
+    async def close(self) -> None:
+        """Shut down the health server then close the gateway connection.
+
+        Overrides :meth:`discord.Client.close` to ensure the aiohttp runner
+        started in :meth:`setup_hook` is cleaned up before the process exits.
+        Cleanup is best-effort: a failure here is logged but not re-raised so
+        the gateway close still proceeds.
+        """
+        if self._health_runner is not None:
+            try:
+                await self._health_runner.cleanup()
+                _logger.info("Health server shut down cleanly")
+            except Exception:
+                _logger.warning("Health server shutdown encountered an error", exc_info=True)
+        await super().close()
 
 
 def build_intents() -> discord.Intents:

@@ -112,24 +112,21 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
               value: managedIdentityClientId
             }
           ]
-          // Exec liveness probe — confirms the reminder scheduler loop is
-          // alive by checking the sentinel file at /tmp/scheduler-heartbeat.
+          // httpGet liveness probe — calls GET /healthz on port 8080.
+          // The /healthz endpoint returns 200 when the reminder scheduler has
+          // produced a heartbeat within the last 60 s, and 503 otherwise.
+          // ACA does NOT support exec probes (ARM API rejects them at
+          // deployment time despite the schema allowing the field — see #85).
           // Three consecutive 30 s failures (~90 s) trigger a restart.
-          // initialDelaySeconds: 30 matches the cold-start grace period.
-          // See plan § 8 for full spec.
+          // initialDelaySeconds: 30 matches the cold-start grace period so
+          // the probe does not fire before the scheduler has had a chance to
+          // tick for the first time.
           probes: [
             {
               type: 'Liveness'
-              // BCP037: 'exec' is valid in the ARM API for ContainerAppProbe but
-              // the Bicep type definition is missing it. Suppress until the type
-              // is updated upstream (https://aka.ms/bicep-type-issues).
-              #disable-next-line BCP037
-              exec: {
-                command: [
-                  'python'
-                  '-m'
-                  'mom_bot.health.liveness'
-                ]
+              httpGet: {
+                path: '/healthz'
+                port: 8080
               }
               periodSeconds: 30
               failureThreshold: 3

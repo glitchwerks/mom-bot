@@ -25,10 +25,12 @@ Architecture summary
 - **No ``time.sleep``**: all waits are ``await asyncio.sleep(...)`` so the
   event loop stays responsive and ``time-machine`` interacts correctly in
   tests.
-- **Liveness sentinel**: the scheduler touches
-  ``/tmp/scheduler-heartbeat`` at the start of every tick (before the
-  readiness guard) so the Container Apps exec probe (plan § 8) can confirm
-  the loop is alive even when the gateway is disconnected.
+- **Liveness sentinel**: the scheduler calls
+  :func:`mom_bot.health.record_heartbeat` at the start of every tick
+  (before the readiness guard) so the Container Apps httpGet probe against
+  ``GET /healthz`` can confirm the loop is alive even when the gateway is
+  disconnected.  The legacy sentinel file (``/tmp/scheduler-heartbeat``) is
+  also touched for backward compatibility during any transition period.
 
 Discord error taxonomy (plan § 5)
 ----------------------------------
@@ -63,6 +65,7 @@ import discord
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import mom_bot.health as health
 from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
 from mom_bot.reminders.sent_store import ReminderSentStore
 
@@ -129,6 +132,9 @@ class ReminderScheduler:
         while True:
             # Step 1 — liveness sentinel (before readiness guard so a
             # healthy-but-disconnected scheduler still updates the heartbeat).
+            # The in-process heartbeat is the primary signal; the legacy file
+            # touch is kept for operator debugging convenience.
+            health.record_heartbeat()
             try:
                 _HEARTBEAT_PATH.touch()
             except OSError:
