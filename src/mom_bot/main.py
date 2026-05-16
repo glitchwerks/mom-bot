@@ -8,6 +8,19 @@ The :func:`make_client` factory is intentionally separated from
 :func:`main` so tests can instantiate the client without invoking
 :meth:`discord.Client.run` (which would attempt a live gateway connection).
 
+Startup migrations (issue #94)
+-------------------------------
+:func:`run_migrations` is called once at the top of :meth:`MomBot.setup_hook`
+— before the gateway connects and before any SQLAlchemy session is opened.
+It invokes ``alembic upgrade head`` via the Python API (not the CLI) so the
+correct schema is in place before the bot reads or writes any table.
+
+This approach is safe for the SQLite-on-AzureFile topology used in Epic 2
+because ``maxReplicas: 1`` + ``activeRevisionsMode: Single`` guarantee a
+single concurrent writer, eliminating the usual objection to app-side
+migrations.  It is a stopgap pending the Postgres migration in Epic 3 (#91),
+after which CI takes responsibility for applying migrations.
+
 Scheduler wiring (plan § 6)
 ----------------------------
 :meth:`MomBot.setup_hook` syncs slash commands and then spawns a task that
@@ -35,6 +48,8 @@ import time
 
 import discord
 from aiohttp import web
+from alembic.command import upgrade as alembic_upgrade
+from alembic.config import Config as AlembicConfig
 from discord import app_commands
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -50,6 +65,44 @@ _logger = logging.getLogger(__name__)
 
 # Recorded once at module import; used to compute uptime in /ping responses.
 _started_at: float = time.monotonic()
+
+# Path to alembic.ini, resolved relative to the process working directory.
+# In the Docker container the WORKDIR is /app and alembic.ini is copied there,
+# so "alembic.ini" resolves to /app/alembic.ini — correct.  Override via the
+# MOM_BOT_ALEMBIC_CONFIG env var for environments that differ.
+_ALEMBIC_INI: str = os.environ.get("MOM_BOT_ALEMBIC_CONFIG", "alembic.ini")
+
+
+def run_migrations() -> None:
+    """Apply outstanding Alembic migrations to the configured database.
+
+    Called once at bot startup (inside :meth:`MomBot.setup_hook`) before any
+    SQLAlchemy session is opened.  Uses the Alembic Python API rather than
+    the CLI so the ``alembic`` binary does not need to be on PATH inside the
+    container.
+
+    The database URL is resolved by ``migrations/env.py`` in the standard
+    priority order: ``MOM_BOT_DATABASE_URL`` env var first, then the
+    ``sqlalchemy.url`` value in ``alembic.ini``.  No changes to ``env.py``
+    are required.
+
+    ``alembic upgrade head`` is idempotent — if the schema is already at
+    head, Alembic does nothing.  This makes the call safe on every restart.
+
+    On failure the exception propagates uncaught.  The bot must not start
+    with a stale schema; ACA will restart the container and the operator
+    will see the error in the log stream.  See issue #94 for the topology
+    rationale.
+
+    Raises:
+        Exception: Any exception raised by Alembic is re-raised without
+            modification so the bot crashes loudly rather than starting
+            in a broken state.
+    """
+    _logger.info("running alembic migrations (alembic upgrade head)")
+    alembic_cfg = AlembicConfig(_ALEMBIC_INI)
+    alembic_upgrade(alembic_cfg, "head")
+    _logger.info("alembic migrations applied")
 
 
 def _log_task_exception(task: asyncio.Task[object]) -> None:
@@ -142,7 +195,16 @@ class MomBot(discord.Client):
                 Vault.
             ValueError: If the stored guild-id cannot be cast to ``int``.
             discord.HTTPException: If the slash-command sync request fails.
+            Exception: If ``run_migrations`` raises, the exception propagates
+                so the bot crashes loudly rather than starting with a stale
+                schema.  ACA will restart the container.
         """
+        # Apply outstanding database migrations before opening any session.
+        # Runs before gateway connect — the SQLite-on-AzureFile volume is
+        # reachable by the container at this point but the Discord gateway
+        # is not yet connected.  Fails loudly on error (see issue #94).
+        run_migrations()
+
         # Start the /healthz HTTP server before gateway connect so the ACA
         # liveness probe can reach it as soon as the container is up.
         runner, _site = await start_health_server()
