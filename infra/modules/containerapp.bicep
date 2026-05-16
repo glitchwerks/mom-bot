@@ -125,7 +125,7 @@ resource storageBinding 'Microsoft.App/managedEnvironments/storages@2024-03-01' 
       accountName: storageAccount.name
       accountKey: storageAccount.listKeys().keys[0].value
       shareName: fileShareName
-      accessMode: 'ReadWriteOnce'
+      accessMode: 'ReadWrite'
     }
   }
 }
@@ -148,6 +148,8 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
     configuration: {
       // Ingress disabled — Discord bot is outbound-only for v1.0.
       // Epic 2.6 (role-sync sidecar) will re-enable ingress.
+      // Policy 1 reinforcement (issue #87): no rolling overlap — old replica drains before new one starts.
+      activeRevisionsMode: 'Single'
       secrets: [
         {
           name: 'database-url'
