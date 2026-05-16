@@ -477,9 +477,9 @@ Prune snapshots older than 7 days (run after taking the new snapshot):
 
 ```powershell
 # List and delete snapshots older than 7 days.
-# Note: az CLI date arithmetic requires bash; run this in Git Bash or WSL.
+$cutoff = (Get-Date).ToUniversalTime().AddDays(-7).ToString('yyyy-MM-ddTHH:mm:ssZ')
 az storage share list --account-name <storage-account-name> --include-snapshots `
-  --query "[?snapshot && snapshot < '$(date -u -d '7 days ago' -Iseconds)'].snapshot" -o tsv | `
+  --query "[?snapshot && snapshot < '$cutoff'].snapshot" -o tsv |
   ForEach-Object { az storage share delete --account-name <storage-account-name> --name mom-bot-data --snapshot $_ }
 ```
 
@@ -590,7 +590,7 @@ The SQLite-on-AzureFile setup is a **temporary stopgap**. The production target
 is a managed PostgreSQL instance (Azure Database for PostgreSQL Flexible Server or
 equivalent). Migration is tracked under Epic 1+; the specific tracking issue is
 TBD (see follow-up issue "Track PostgreSQL migration epic (replaces
-SQLite-on-SMB stopgap)" filed in PR #87). The `prod-database-url` KV secret and
+SQLite-on-SMB stopgap)" tracked by issue #87, implemented in PR #92). The `prod-database-url` KV secret and
 the `MOM_BOT_DATABASE_URL` env var are already wired to accept a PostgreSQL
 connection string — no application code change is required for the migration,
 only the secret value and the removal of the AzureFile volume wiring.
