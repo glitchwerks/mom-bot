@@ -1,3 +1,18 @@
+// -----------------------------------------------------------------------------
+// SQLite-on-SMB risk acknowledgement (Policy 3, issue #87)
+// -----------------------------------------------------------------------------
+// This Container App runs SQLite over an AzureFile (SMB) volume mount.
+// SQLite + SMB is NOT a supported production database topology — SMB does not
+// honour the fsync/lock semantics SQLite assumes. Specific risks:
+//   - Corruption window if the SMB connection drops mid-write.
+//   - Locking is advisory only; concurrent writers will corrupt the file.
+//     Mitigated by Policy 1 (@allowed([1]) maxReplicas — single writer).
+//   - No point-in-time recovery; daily share snapshots (Policy 2) are the
+//     recovery SLA (7-day retention; granularity = 1 day).
+// This is a STOPGAP until PostgreSQL migration (Epic 1+). Do not extend the
+// SQLite-on-SMB pattern to additional services.
+// -----------------------------------------------------------------------------
+
 // containerapp.bicep — Container Apps Environment + Container App ca-mom-bot.
 //
 // Design choices:
@@ -15,7 +30,8 @@
 //   mi-mom-bot.clientId and is required by ManagedIdentityCredential; the
 //   ACA IMDS endpoint does not auto-select the sole UserAssigned identity.
 // - Single replica (scale 0-1) — SQLite + WAL requires single writer.
-//   See framework plan § Confirmed design decisions.
+//   Policy 1 (issue #87): @allowed([1]) on maxReplicas makes the constraint
+//   load-bearing at Bicep build time.
 //
 // Role assignments:
 // - mom-bot-gha (deploy pipeline) → Container Apps Contributor at RG scope
@@ -45,6 +61,16 @@ param keyVaultName string
 
 @description('Object ID of the mom-bot-gha service principal for deploy-time Container Apps access.')
 param ghaServicePrincipalObjectId string
+
+@description('URI of the Key Vault (e.g. https://kv-mombot-eastus2.vault.azure.net/). Used for KV-backed secret references.')
+param keyVaultUri string
+
+@description('Name of the Container Apps managed-environment storage binding (from storage.bicep output storageBindingName).')
+param storageBindingName string
+
+@description('Policy 1 (issue #87): single-writer enforcement. @allowed([1]) makes maxReplicas > 1 a hard Bicep build error, preventing accidental multi-replica deployments that would corrupt the SQLite DB.')
+@allowed([1])
+param maxReplicas int = 1
 
 // ---------------------------------------------------------------------------
 // Built-in RBAC role definition IDs (stable; do not parameterize)
@@ -84,12 +110,26 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
     configuration: {
       // Ingress disabled — Discord bot is outbound-only for v1.0.
       // Epic 2.6 (role-sync sidecar) will re-enable ingress.
+      secrets: [
+        {
+          name: 'database-url'
+          keyVaultUrl: '${keyVaultUri}secrets/prod-database-url'
+          identity: managedIdentityId
+        }
+      ]
     }
     template: {
       scale: {
         minReplicas: 0
-        maxReplicas: 1
+        maxReplicas: maxReplicas
       }
+      volumes: [
+        {
+          name: 'data'
+          storageType: 'AzureFile'
+          storageName: storageBindingName
+        }
+      ]
       containers: [
         {
           name: 'mom-bot'
@@ -110,6 +150,16 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_CLIENT_ID'
               value: managedIdentityClientId
+            }
+            {
+              name: 'MOM_BOT_DATABASE_URL'
+              secretRef: 'database-url'
+            }
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'data'
+              mountPath: '/data'
             }
           ]
           // httpGet liveness probe — calls GET /healthz on port 8080.

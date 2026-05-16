@@ -94,5 +94,31 @@ module containerApp 'modules/containerapp.bicep' = {
     containerImage: containerImage
     keyVaultName: keyVaultName
     ghaServicePrincipalObjectId: ghaServicePrincipalObjectId
+    keyVaultUri: kv.outputs.uri
+    // storageBindingName is the well-known constant 'mom-bot-data-binding'
+    // declared in storage.bicep. The storage module must deploy after
+    // containerApp (it creates the binding on the CAE that containerApp
+    // creates). The name is stable so we pass it as a literal here rather
+    // than wiring through an output (which would create a circular dependency).
+    storageBindingName: 'mom-bot-data-binding'
+    maxReplicas: 1
   }
+}
+
+// ---------------------------------------------------------------------------
+// Storage (AzureFile backing for SQLite — stopgap, issue #87)
+// Deploys after containerApp because the managed-environment storage binding
+// (Microsoft.App/managedEnvironments/storages) requires the CAE to exist first.
+// ---------------------------------------------------------------------------
+
+module storage 'modules/storage.bicep' = {
+  name: 'deploy-storage'
+  scope: rg
+  params: {
+    location: location
+    containerAppsEnvironmentName: containerAppsEnvironmentName
+  }
+  dependsOn: [
+    containerApp
+  ]
 }

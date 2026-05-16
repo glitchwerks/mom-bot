@@ -390,3 +390,207 @@ az deployment sub create `
 
 **Post-merge (validation):**
 - [ ] Step 9 — Run the deploy workflow (`workflow_dispatch` on `deploy.yml` from `main`)
+
+---
+
+## AzureFile-backed SQLite (Policy decisions from #87)
+
+This section documents the operator policies that govern the SQLite-on-AzureFile
+stopgap introduced in PR #87. These policies are load-bearing — violating them
+risks database corruption.
+
+---
+
+### Backing store choice
+
+**Storage type:** Azure File Share, Standard LRS
+**Cost:** ~$0.25–1.10/month for a ≤ 1 GiB share
+
+EmptyDir (the default Container Apps ephemeral volume) loses all state on every
+revision swap — unacceptable for a database. PostgreSQL is the correct long-term
+answer (see Epic 1+, tracking issue TBD), but standing up a managed Postgres
+instance is out of scope for the initial bot bringup. AzureFile Standard LRS
+gives a persistent, SMB-mountable file share for under $2/month with no managed
+database overhead. It is explicitly a **stopgap** — the `prod-database-url` KV
+secret already points to the `/data/mom_bot.db` path that will be replaced when
+the PostgreSQL migration lands.
+
+---
+
+### Risk acknowledgement (Policy 3)
+
+See the verbatim risk acknowledgement block at the top of
+`infra/modules/containerapp.bicep`. Summary of accepted risks:
+
+- SMB does not honour the fsync/lock semantics SQLite assumes; a dropped
+  connection mid-write opens a corruption window.
+- File-level locking over SMB is advisory only. **Concurrent writers will
+  corrupt the database file.** Mitigated by Policy 1 (see below).
+- No point-in-time recovery below 1-day granularity. Daily share snapshots
+  (Policy 2, see below) are the recovery SLA.
+
+Do not extend the SQLite-on-SMB pattern to additional services.
+
+---
+
+### `maxReplicas` lock — Policy 1
+
+**Rule:** The Container App must never run more than one replica simultaneously.
+
+**Why:** SQLite's WAL mode assumes a single writer. Multiple replicas would
+each open the same `/data/mom_bot.db` over SMB, competing for the write lock.
+SMB advisory locking provides no crash-safe mutual exclusion — simultaneous
+writers will corrupt the file.
+
+**Enforcement:** The `maxReplicas` parameter in `infra/modules/containerapp.bicep`
+carries an `@allowed([1])` decorator. Supplying any value other than `1` is a
+**hard Bicep build error** (BCP036) — the template will not compile, so the
+constraint cannot be silently bypassed via a parameter file change. Verified by
+the negative test in PR #87 (error output: `BCP036: The property "maxReplicas"
+expected a value of type "1 | null" but the provided value is of type "2"`).
+
+**Operator escape-hatch:** If the decorator must be removed (e.g. for a
+PostgreSQL migration that makes multi-replica safe), the change requires editing
+the decorator in `containerapp.bicep` and redeploying. This is intentionally
+painful — a quiet parameter bump should never silently lift the limit.
+
+---
+
+### Snapshot schedule — Policy 2
+
+Daily share snapshots are the recovery mechanism. Granularity is 1 day; retention
+is 7 days. Automation is deferred to a follow-up issue (see "Automate AzureFile
+snapshot schedule for prod") pending OIDC/federated auth in CI (#83).
+
+Until automation lands, run this command manually each day (or via a local
+Task Scheduler / cron job on the operator's workstation):
+
+```powershell
+# Take a snapshot. Replace <storage-account-name> with the value from the
+# storage.bicep Bicep output or: az storage account list -g mom-bot --query "[].name" -o tsv
+az storage share snapshot create `
+  --account-name <storage-account-name> `
+  --name mom-bot-data
+```
+
+Prune snapshots older than 7 days (run after taking the new snapshot):
+
+```powershell
+# List and delete snapshots older than 7 days.
+# Note: az CLI date arithmetic requires bash; run this in Git Bash or WSL.
+az storage share list --account-name <storage-account-name> --include-snapshots `
+  --query "[?snapshot && snapshot < '$(date -u -d '7 days ago' -Iseconds)'].snapshot" -o tsv | `
+  ForEach-Object { az storage share delete --account-name <storage-account-name> --name mom-bot-data --snapshot $_ }
+```
+
+The storage account name is emitted by `storage.bicep` as output `storageAccountName`
+and visible in the Azure portal under the `mom-bot` resource group, or via:
+
+```powershell
+az storage account list -g mom-bot --query "[].name" -o tsv
+```
+
+---
+
+### Persistence verification drill
+
+Run after every Bicep redeploy or revision swap to confirm the volume survives:
+
+1. **Write a test row:**
+   ```powershell
+   # Exec into a running replica (requires Azure CLI extension + container name)
+   az containerapp exec -g mom-bot -n ca-mom-bot --command "/bin/sh"
+   # Inside the container:
+   python -c "
+   import sqlalchemy, os
+   engine = sqlalchemy.create_engine(os.environ['MOM_BOT_DATABASE_URL'])
+   with engine.connect() as c:
+       c.execute(sqlalchemy.text('CREATE TABLE IF NOT EXISTS _drain_test (v TEXT)'))
+       c.execute(sqlalchemy.text(\"INSERT INTO _drain_test VALUES ('persist-check')\"))
+       c.commit()
+   print('written')
+   "
+   ```
+
+2. **Force a revision swap** (no-op env-var update triggers a new revision):
+   ```powershell
+   az containerapp update -g mom-bot -n ca-mom-bot --set-env-vars DRAIN_CHECK=$(Get-Date -Format o)
+   ```
+
+3. **Verify the row persists** (exec into the new revision):
+   ```powershell
+   az containerapp exec -g mom-bot -n ca-mom-bot --command "/bin/sh"
+   # Inside the container:
+   python -c "
+   import sqlalchemy, os
+   engine = sqlalchemy.create_engine(os.environ['MOM_BOT_DATABASE_URL'])
+   with engine.connect() as c:
+       rows = c.execute(sqlalchemy.text('SELECT v FROM _drain_test')).fetchall()
+   print(rows)
+   "
+   ```
+   Expected output: `[('persist-check',)]`
+
+4. **Clean up:**
+   ```python
+   c.execute(sqlalchemy.text('DROP TABLE _drain_test'))
+   c.commit()
+   ```
+
+---
+
+### Snapshot restore drill
+
+Run periodically to validate the recovery path is functional:
+
+1. **Take a snapshot** (note the returned timestamp):
+   ```powershell
+   $snap = az storage share snapshot create `
+     --account-name <storage-account-name> `
+     --name mom-bot-data `
+     --query snapshot -o tsv
+   Write-Host "Snapshot: $snap"
+   ```
+
+2. **Modify the database** (simulate data loss/corruption — write a known-bad row
+   as in step 1 of the persistence drill).
+
+3. **Restore from snapshot** — copy the DB file out of the snapshot mount:
+   ```powershell
+   # List snapshot contents to confirm the file is present
+   az storage file list --account-name <storage-account-name> `
+     --share-name mom-bot-data --snapshot $snap --query "[].name" -o tsv
+
+   # Copy the DB back from the snapshot (overwrites the live file)
+   az storage file copy start `
+     --account-name <storage-account-name> `
+     --destination-share mom-bot-data `
+     --destination-path mom_bot.db `
+     --source-account-name <storage-account-name> `
+     --source-share mom-bot-data `
+     --source-path mom_bot.db `
+     --source-snapshot $snap
+   ```
+
+4. **Force a revision restart** to reload the restored file:
+   ```powershell
+   az containerapp revision restart -g mom-bot -n ca-mom-bot --revision $(
+     az containerapp revision list -g mom-bot -n ca-mom-bot --query "[0].name" -o tsv
+   )
+   ```
+
+5. **Verify state** matches the pre-modification snapshot (re-run the read from
+   step 3 of the persistence drill).
+
+---
+
+### Forward pointer — PostgreSQL migration
+
+The SQLite-on-AzureFile setup is a **temporary stopgap**. The production target
+is a managed PostgreSQL instance (Azure Database for PostgreSQL Flexible Server or
+equivalent). Migration is tracked under Epic 1+; the specific tracking issue is
+TBD (see follow-up issue "Track PostgreSQL migration epic (replaces
+SQLite-on-SMB stopgap)" filed in PR #87). The `prod-database-url` KV secret and
+the `MOM_BOT_DATABASE_URL` env var are already wired to accept a PostgreSQL
+connection string — no application code change is required for the migration,
+only the secret value and the removal of the AzureFile volume wiring.
