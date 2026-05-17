@@ -15,12 +15,12 @@ param managedIdentityName = 'mi-mom-bot'
 param containerAppsEnvironmentName = 'cae-mom-bot-eastus2'
 param containerAppName = 'ca-mom-bot'
 
-// Container image — placeholder until Epic 1 (image build+push to GHCR).
-// This Microsoft public quickstart image is always pullable and serves a
-// static "hello, container apps!" page. Epic 1 swaps this for the real
-// mom-bot image pushed by ci.yml. Override at deploy time with:
-//   --parameters containerImage="ghcr.io/glitchwerks/mom-bot:<sha>"
-param containerImage = 'mcr.microsoft.com/k8se/quickstart:latest'
+// Container image — resolved from the CONTAINER_IMAGE env var at deploy time.
+// The workflow sets this to the currently-running live image before invoking
+// Bicep, preventing a phantom containerImage diff in every what-if run.
+// The quickstart fallback preserves cold-start behavior for fresh bootstraps
+// where no image has been deployed yet.
+param containerImage = readEnvironmentVariable('CONTAINER_IMAGE', 'mcr.microsoft.com/k8se/quickstart:latest')
 
 // Provisioning-run-specific identifier sourced from deploy-time env var.
 // Export GHA_SP_OBJECT_ID before deploying (see infra/aad-runbook.md Step 4).
