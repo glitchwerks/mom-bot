@@ -347,6 +347,13 @@ def main() -> None:
         f"postgresql://{encoded_user}@{args.host}:{args.port}/{args.db}"
         "?sslmode=require"
     )
+    # Alembic passes this DSN to SQLAlchemy, which defaults postgresql:// to
+    # the psycopg2 dialect. This installation only has psycopg3, so override
+    # the scheme to postgresql+psycopg:// (the psycopg v3 dialect selector).
+    alembic_dsn = dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+    log.info(
+        "  alembic dsn scheme : postgresql+psycopg  (raw psycopg dsn keeps postgresql://)"
+    )
 
     try:
         token = mint_token(args.token_resource)
@@ -359,7 +366,7 @@ def main() -> None:
         )
 
         if args.alembic:
-            ok = run_alembic(dsn=dsn, token=token)
+            ok = run_alembic(dsn=alembic_dsn, token=token)
             if not ok:
                 fail_reason = "alembic upgrade head returned non-zero"
 
