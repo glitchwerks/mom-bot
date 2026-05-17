@@ -27,6 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 # ---------------------------------------------------------------------------
 # Logging setup — configured before argument parsing so the format is
@@ -200,7 +201,13 @@ def connect_and_probe(
         )
         sys.exit(1)
 
-    dsn = f"postgresql://{user}@{host}:{port}/{db}?sslmode=require"
+    encoded_user = _url_quote(user, safe="")
+    log.info(
+        "  user     : %s  (encoded: %s)",
+        user,
+        encoded_user,
+    )
+    dsn = f"postgresql://{encoded_user}@{host}:{port}/{db}?sslmode=require"
     log.info("  dsn      : %s  (no password logged)", dsn)
 
     # Inject token as password via PGPASSWORD — scoped, not printed.
@@ -318,8 +325,18 @@ def main() -> None:
     fail_reason: str | None = None
 
     # Build DSN once — reused for alembic step if requested.
+    # Percent-encode the user to handle guest UPNs that contain @ and #
+    # (e.g. foo_bar.com#EXT#@tenant.onmicrosoft.com).  RFC 3986 userinfo
+    # reserves those chars as delimiters; psycopg3 takes the last @ as the
+    # host delimiter and produces a bogus hostname otherwise.
+    encoded_user = _url_quote(args.user, safe="")
+    log.info(
+        "  user     : %s  (encoded: %s)",
+        args.user,
+        encoded_user,
+    )
     dsn = (
-        f"postgresql://{args.user}@{args.host}:{args.port}/{args.db}"
+        f"postgresql://{encoded_user}@{args.host}:{args.port}/{args.db}"
         "?sslmode=require"
     )
 
