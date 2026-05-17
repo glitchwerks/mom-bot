@@ -148,7 +148,7 @@ Step 1 — write the role definition JSON to a temp file. Use the verbatim body:
   "Description": "Least-privilege role for mom-bot-gha SP to run az deployment sub create. Grants only deployment-resource CRUD and resource-group read at subscription scope; all child-resource writes flow through the separate RG-scoped Container Apps Contributor grant.",
   "Actions": [
     "Microsoft.Resources/deployments/*",
-    "Microsoft.Resources/resourceGroups/read"
+    "Microsoft.Resources/subscriptions/resourceGroups/read"
   ],
   "NotActions": [],
   "DataActions": [],
@@ -158,6 +158,8 @@ Step 1 — write the role definition JSON to a temp file. Use the verbatim body:
   ]
 }
 ```
+
+Note: the action name includes the `subscriptions/` segment — Azure rejects `Microsoft.Resources/resourceGroups/read` with `InvalidActionOrNotAction`.
 
 Step 2 — create the role definition and assign it:
 
@@ -180,7 +182,7 @@ az role assignment create `
 **Fallback (dated exception, requires follow-up issue).** If `az role definition create` fails for unrelated reasons (tenant policy denying custom role creation, naming collision, propagation delays not resolvable inside the deploy window) and the operator needs to unblock work, grant built-in `Contributor` at sub scope as an expedient — but file a follow-up issue immediately to replace it with the custom role within the next sprint. Do not leave Contributor in place silently.
 
 **Acceptance:**
-- `az role assignment list --assignee $AZURE_CLIENT_ID --scope /subscriptions/213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 -o table` shows exactly the custom role `Mom-bot GHA Subscription Deployer` at sub scope and Container Apps Contributor at RG-scope `mom-bot`, and nothing else (no Owner, no built-in Contributor, no leftover grants)
+- `az role assignment list --assignee $AZURE_CLIENT_ID --scope /subscriptions/213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 -o table` shows exactly the custom role `Mom-bot GHA Subscription Deployer` at sub scope and Container Apps Contributor at RG-scope `mom-bot`, alongside the existing Key Vault Secrets Officer grant on `kv-mombot-eastus2` (Step 7); no other unexplained assignments (no Owner, no built-in Contributor, no leftover grants)
 - The role definition and assignment are documented in `aad-runbook.md` as Step 4.5, including the verbatim JSON body
 - If the fallback Contributor path was used, the runbook records the date and links the follow-up issue
 
