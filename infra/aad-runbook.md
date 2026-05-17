@@ -119,6 +119,73 @@ $env:GHA_SP_OBJECT_ID = $SpObjectId
 
 ---
 
+## Step 4.5 — Grant SP subscription-scope deploy permission
+
+`mom-bot-gha` holds RG-scoped Container Apps Contributor on `mom-bot` (granted by `infra/modules/containerapp.bicep`), but `az deployment sub create` requires `Microsoft.Resources/deployments/write` at **subscription** scope — RG-scope is insufficient because the deployment resource itself is created at sub scope. The manual workstation deploys in Step 5 work because the operator's own AAD account holds Owner; the SP cannot bootstrap itself. Granting this role requires Owner or User Access Administrator at sub scope and must be operator-run.
+
+### Role definition JSON
+
+```json
+{
+  "Name": "Mom-bot GHA Subscription Deployer",
+  "IsCustom": true,
+  "Description": "Least-privilege role for mom-bot-gha SP to run az deployment sub create. Grants only deployment-resource CRUD and resource-group read at subscription scope; all child-resource writes flow through the separate RG-scoped Container Apps Contributor grant.",
+  "Actions": [
+    "Microsoft.Resources/deployments/*",
+    "Microsoft.Resources/subscriptions/resourceGroups/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0"
+  ]
+}
+```
+
+> **Important:** the action name is `Microsoft.Resources/subscriptions/resourceGroups/read` — note the `subscriptions/` segment. The shorter form `Microsoft.Resources/resourceGroups/read` is rejected by Azure with `InvalidActionOrNotAction`.
+
+### Procedure
+
+```powershell
+# Build the role definition file
+$rolePath = Join-Path $env:TEMP 'mom-bot-gha-deployer.json'
+# ...paste the JSON above into $rolePath... (operator pastes from this runbook)
+
+# Create the role definition (one-time per subscription)
+az role definition create --role-definition $rolePath
+
+# Resolve mom-bot-gha's appId from Entra (more reliable than copying repo vars)
+$gha = az ad sp list --display-name mom-bot-gha --query "[0].appId" -o tsv
+
+# Assign at subscription scope
+az role assignment create `
+    --assignee $gha `
+    --role "Mom-bot GHA Subscription Deployer" `
+    --scope /subscriptions/213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0
+
+# Verify — should show the new role at sub scope alongside the existing RG-scoped grants
+az role assignment list --assignee $gha --all -o table
+```
+
+### Expected verify output
+
+After Phase 0.5 lands, `az role assignment list` should show these three assignments:
+
+| Role | Scope |
+|---|---|
+| Mom-bot GHA Subscription Deployer | `/subscriptions/<sub-id>` |
+| Container Apps Contributor | `.../resourceGroups/mom-bot` |
+| Key Vault Secrets Officer | `.../Microsoft.KeyVault/vaults/kv-mombot-eastus2` |
+
+### Fallback
+
+If `az role definition create` fails for tenant-policy or naming-collision reasons, grant built-in `Contributor` at sub scope as an expedient — but file a follow-up issue immediately to swap it for the custom role. Don't leave Contributor silently in place.
+
+See plan `docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md` § Phase 0.5 for design rationale.
+
+---
+
 ## Step 5 — Deploy Bicep infrastructure
 
 The `$env:GHA_SP_OBJECT_ID` env var (exported in Step 4) is read by
@@ -415,6 +482,7 @@ az deployment sub create `
 - [ ] Step 3a — Federated credential for `main` push created
 - [ ] Step 3b — Federated credential for pull requests created
 - [ ] Step 4 — `$env:GHA_SP_OBJECT_ID` exported in session
+- [ ] Step 4.5 (one-time) — Custom role `Mom-bot GHA Subscription Deployer` created and assigned to `mom-bot-gha` at subscription scope
 - [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)
 - [ ] Step 6 — Repo variables set in GitHub
 - [ ] Step 7 — Grant yourself Key Vault Secrets Officer for seeding
