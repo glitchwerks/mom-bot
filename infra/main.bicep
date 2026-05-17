@@ -41,6 +41,15 @@ param ghaServicePrincipalObjectId string
 @description('Container image reference. Defaults to Microsoft quickstart (always pullable) until Epic 1 wires up GHCR image build+push.')
 param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
+@description('Tenant ID — needed for Postgres AAD admin configuration.')
+param tenantId string = subscription().tenantId
+
+@description('Operator egress IP for Postgres firewall whitelist. Update if operator IP changes.')
+param operatorIpAddress string
+
+@description('Static egress IP of the Container Apps Environment (cae-mom-bot) for Postgres firewall whitelist. Retrieve with: az containerapp env show -n cae-mom-bot -g mom-bot --query properties.staticIp -o tsv')
+param caeEgressIp string
+
 // ---------------------------------------------------------------------------
 // Resource group
 // ---------------------------------------------------------------------------
@@ -75,6 +84,24 @@ module kv 'modules/keyvault.bicep' = {
     keyVaultName: keyVaultName
     managedIdentityPrincipalId: identity.outputs.principalId
     ghaServicePrincipalObjectId: ghaServicePrincipalObjectId
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PostgreSQL (replaces AzureFile + SQLite stopgap — issue #91)
+// ---------------------------------------------------------------------------
+
+module postgres 'modules/postgres.bicep' = {
+  name: 'deploy-postgres'
+  scope: rg
+  params: {
+    location: location
+    tenantId: tenantId
+    managedIdentityPrincipalId: identity.outputs.principalId
+    managedIdentityName: managedIdentityName
+    ghaServicePrincipalObjectId: ghaServicePrincipalObjectId
+    operatorIpAddress: operatorIpAddress
+    caeEgressIp: caeEgressIp
   }
 }
 
