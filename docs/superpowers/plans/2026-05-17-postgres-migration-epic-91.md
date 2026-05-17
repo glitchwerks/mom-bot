@@ -1,3 +1,35 @@
+---
+touches:
+  - src/mom_bot/db/__init__.py
+  - src/mom_bot/main.py
+  - src/mom_bot/reminders/scheduler.py
+  - migrations/versions/0002_reminders_schema.py
+  - migrations/env.py
+  - tests/test_alembic.py
+  - tests/test_alembic_postgres.py        # planned new file
+  - tests/test_db_token_injection.py      # planned new file
+  - tests/test_main_wireup.py
+  - tests/test_migrations_startup.py
+  - Dockerfile
+  - pyproject.toml
+  - uv.lock
+  - infra/main.bicep
+  - infra/main.bicepparam
+  - infra/modules/postgres.bicep          # planned new file
+  - infra/modules/containerapp.bicep
+  - infra/modules/storage.bicep           # for removal in Phase 5
+  - infra/aad-runbook.md
+  - docs/secrets-inventory.md
+  - README.md
+  - .github/workflows/deploy.yml
+skills_relevant:
+  - python
+  - bicep
+  - azure
+  - github-actions
+  - powershell
+---
+
 # PostgreSQL Migration Epic (#91) — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -96,17 +128,18 @@ No dual-write infrastructure, no migration script, no cutover dance. **Skip the 
 ### New files
 
 - `infra/modules/postgres.bicep` — Postgres Flexible Server, firewall rules, AAD admin assignment.
-- `src/mom_bot/db.py` — SQLAlchemy engine factory with AAD-token `do_connect` event hook and `pool_recycle=4800`. **New module** — extracts `_build_session_factory` from `main.py` so the token-injection logic lives separately and is unit-testable. (Engine factory is fewer than 60 LOC; this is a focused responsibility split, not bloat.)
 - `tests/test_db_token_injection.py` — verifies the AAD-token hook is invoked on connect and stamps `connection.password` from the credential.
 - `tests/test_alembic_postgres.py` — runs `alembic upgrade head` against a real Postgres instance (via `testcontainers-python` or GitHub Actions `services: postgres:16`) to catch dialect-specific DDL failures before they reach production.
+- `.github/workflows/mini-spike-postgres-oidc.yml` — one-off Phase 3 verification that `mom-bot-gha` federated SP can mint an oss-rdbms AAD token via GHA OIDC (Charge 12). Run once; disable/delete after verification.
 
 ### Modified files
 
+- `src/mom_bot/db/__init__.py` — **existing package.** `build_session_factory` added alongside existing `Base = DeclarativeBase` export. `Base` import in `migrations/env.py:24` (`from mom_bot.db import Base`) is preserved unchanged. A new `src/mom_bot/db.py` must NOT be created — it would be a name collision with the `db/` package.
 - `infra/main.bicep` — instantiate `postgres` module; remove `storage` module instantiation; pass Postgres FQDN to `containerapp.bicep`.
 - `infra/main.bicepparam` — add Postgres admin object IDs (UAMI + GHA SP).
 - `infra/modules/containerapp.bicep` — strip storage binding (lines 120-131), volumes (166-173), volumeMounts (201-205); update `database-url` secret reference (KV secret already exists; only the value changes); remove `COPY alembic.ini` and `COPY migrations/` from Dockerfile (Alembic runs only in CI — see Phase 3 deliverable).
 - `infra/aad-runbook.md` — replace the SQLite-on-SMB policy section with the Postgres Entra-admin runbook step; update `prod-database-url` example. Note guest-UPN URL-encoding requirement for operator probe commands.
-- `src/mom_bot/main.py` — replace `_build_session_factory` with import from new `db` module; remove `run_migrations()` (lines 76-105) and its call site in `setup_hook` (line 206); remove the alembic imports at lines 51-52 (`from alembic.command import upgrade as alembic_upgrade`, `from alembic.config import Config as AlembicConfig`); remove `_ALEMBIC_INI` constant (line 73).
+- `src/mom_bot/main.py` — replace `_build_session_factory` with import of `build_session_factory` from `mom_bot.db` (which lives in `db/__init__.py` alongside `Base`); remove `run_migrations()` (lines 76-105) and its call site in `setup_hook` (line 206); remove the alembic imports at lines 51-52 (`from alembic.command import upgrade as alembic_upgrade`, `from alembic.config import Config as AlembicConfig`); remove `_ALEMBIC_INI` constant (line 73).
 - `pyproject.toml` — add `psycopg[binary]>=3.2,<4`, pin `sqlalchemy>=2,<3`, pin `alembic>=1.13,<2` to `dependencies`; materialize `uv.lock` into the image (see dep-pinning decision below).
 - `migrations/versions/0002_reminders_schema.py` — **rewrite the `ck_fire_time_no_seconds` CHECK constraint** to use `EXTRACT(SECOND FROM fire_time_utc) = 0` (dialect-portable: works on both SQLite ≥ 3.38 and Postgres). This is a destructive edit to a committed migration — acceptable because #91 is explicitly fresh-Postgres-no-data-migration. See Phase 2 for rationale.
 - `.github/workflows/deploy.yml` — add steps: install Python+`uv`+`psycopg[binary]`+`alembic`, mint AAD token via `az account get-access-token --resource-type oss-rdbms`, add transient firewall rule for runner IP, run `alembic upgrade head`, remove firewall rule. Pin `az` CLI ≥ 2.86 in the runner prereq check.
@@ -116,7 +149,8 @@ No dual-write infrastructure, no migration script, no cutover dance. **Skip the 
 
 ### Files deleted
 
-- `infra/modules/storage.bicep` — entire file.
+- `infra/modules/storage.bicep` — entire file (Phase 5).
+- `tests/test_migrations_startup.py` — deleted in Phase 3 Task 3.2 after `run_migrations` is removed from `main.py`; all four tests become dead.
 - `migrations/versions/0003_postgres_check_constraint_portability.py` — **not created** (replaced by the in-place rewrite of 0002; see Phase 2 pivot).
 
 ---
@@ -142,7 +176,9 @@ Before any Phase 1 tasks begin, verify:
 
 - [ ] **Microsoft.Graph provider** (R7): `az provider show -n Microsoft.Graph --query registrationState -o tsv` returns an `InvalidResourceNamespace` error on this subscription — Microsoft.Graph is not a registerable Azure resource provider (verified 2026-05-17 against sub `213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0`). The `administrators` child resource on Postgres Flexible Server does **not** require the Microsoft.Graph provider. R7 is **RESOLVED — not applicable**. No registration step needed.
 
-- [ ] **Confirm no SQLite data exists worth preserving** (moved from Phase 4, Task 4.1): run the verification in Task 1.3 below before spending time on provisioning.
+- [ ] **Microsoft.DBforPostgreSQL provider registration** (F8): run `az provider register -n Microsoft.DBforPostgreSQL --wait` to ensure the provider is registered in the subscription. This command is idempotent — if already registered it completes immediately. Fresh Azure subscriptions fail with `Microsoft.DBforPostgreSQL is not registered` when creating a Flexible Server without this step.
+
+- [ ] **Confirm no SQLite data exists worth preserving** (moved from Phase 4, Task 4.1): run the verification in Task 1.1 below before spending time on provisioning.
 
 #### Task 1.1: Verify no SQLite data exists worth preserving
 
@@ -397,11 +433,50 @@ git push -u origin <branch>
 gh pr create --draft --title "feat(infra): provision Postgres (Phase 1 of #91)" --body-file <body>
 ```
 
+#### Task 1.4: Look up CAE static egress IP and emit a named firewall rule
+
+**Files:**
+- Modify: `infra/modules/postgres.bicep`
+- Modify: `infra/main.bicepparam`
+
+The Container Apps Environment `cae-mom-bot` has a static outbound IP that is knowable before Phase 4 cutover. Discovering it at Phase 4 cutover is the worst possible time — a missing firewall rule blocks the bot immediately on a live production restart. Promote this to Phase 1 so the firewall rule is in place before any connection attempt.
+
+- [ ] **Step 1: Look up the CAE static egress IP**
+
+```powershell
+az containerapp env show -n cae-mom-bot -g mom-bot --query 'properties.staticIp' -o tsv
+```
+
+Record the output (a dotted-quad IP). This is the `staticIp` that every outbound connection from `ca-mom-bot` will appear to come from.
+
+- [ ] **Step 2: Add `caeEgressIp` parameter to `postgres.bicep`** and emit a named firewall rule:
+
+```bicep
+@description('Static egress IP of the Container Apps Environment (cae-mom-bot). '
+  + 'Used to allow the bot to connect to Postgres. '
+  + 'Retrieve with: az containerapp env show -n cae-mom-bot -g mom-bot --query properties.staticIp -o tsv')
+param caeEgressIp string
+
+resource fwCae 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
+  parent: pg
+  name: 'allow-cae-egress'
+  properties: {
+    startIpAddress: caeEgressIp
+    endIpAddress: caeEgressIp
+  }
+}
+```
+
+- [ ] **Step 3: Add `caeEgressIp` to `infra/main.bicepparam`** with the value from Step 1.
+
+- [ ] **Step 4: Re-run the `az deployment sub what-if`** to confirm the new rule appears as a net-new `firewallRules` creation alongside the other Phase 1 resources.
+
 **Acceptance criteria for Phase 1:**
 - [ ] `az postgres flexible-server show` returns `state: Ready`.
 - [ ] Operator can `psql` with AAD token (proves auth works end-to-end).
 - [ ] CAE, KV, MI, Container App, storage unchanged (verified by what-if `=` lines).
 - [ ] `az storage file list` on `mom-bot-data` share shows empty / zero-size `.db` file.
+- [ ] Postgres firewall rule `allow-cae-egress` exists and its IP matches `az containerapp env show -n cae-mom-bot -g mom-bot --query 'properties.staticIp' -o tsv`.
 
 ---
 
@@ -447,14 +522,39 @@ This change is a destructive edit to a committed migration. It is acceptable bec
 
 **Note on the old 0003 plan:** the prior Task 2.1 in this plan created `migrations/versions/0003_postgres_check_constraint_portability.py` with a dialect-branched drop-and-recreate. Do not create that file. The `tests/test_alembic.py` assertion change at line ~64 (from `ck_fire_time_no_seconds_v2` back to `ck_fire_time_no_seconds`) is no longer needed — the constraint name is unchanged.
 
-- [ ] **Step 2: Run SQLite-side tests**
+- [ ] **Step 2: Verify SQLite version on the CI runner**
+
+```bash
+python -c 'import sqlite3; print(sqlite3.sqlite_version)'
+```
+
+`EXTRACT(SECOND FROM ...)` requires SQLite ≥ 3.38 (released 2022-02-22). CI's Ubuntu 22.04 ships SQLite 3.37.x. If the version is below 3.38, SQLite will silently accept the expression without enforcing the CHECK — the constraint becomes a no-op locally and the SQLite test path is not authoritative.
+
+**If SQLite < 3.38 on CI:** the `test_alembic_postgres.py` path (Task 2.3) becomes the authoritative enforcement of the CHECK. The SQLite constraint expression should be wrapped in a dialect branch:
+
+```python
+from alembic import op
+from sqlalchemy.engine import Engine
+from sqlalchemy import text
+
+def _check_expr(conn: Engine) -> str:
+    if conn.dialect.name == "sqlite":
+        return "CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0"
+    return "EXTRACT(SECOND FROM fire_time_utc) = 0"
+```
+
+Document the dialect branch decision in the migration file comment if taken.
+
+**If SQLite ≥ 3.38 on CI:** a single `EXTRACT(SECOND FROM fire_time_utc) = 0` expression covers both dialects. Proceed with the single expression.
+
+- [ ] **Step 3: Run SQLite-side tests**
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_alembic.py -v
 ```
-Expected: PASS — the edited migration runs against SQLite using `EXTRACT()`.
+Expected: PASS — the edited migration runs against SQLite using `EXTRACT()` (or dialect branch if SQLite < 3.38).
 
-- [ ] **Step 3: Run Postgres-side migration from operator laptop**
+- [ ] **Step 4: Run Postgres-side migration from operator laptop**
 
 ```powershell
 $token = az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv
@@ -468,7 +568,9 @@ Note the `postgresql+psycopg://` scheme — **not** bare `postgresql://`. SQLAlc
 
 Expected: each revision prints `Running upgrade ...` and exits 0. **First**, install `psycopg[binary]` — Task 2.2 below adds it to `pyproject.toml`.
 
-- [ ] **Step 4: Verify schema**
+**Note on authoritative enforcement:** `test_alembic_postgres.py` (Task 2.3) is the authoritative enforcement of the `ck_fire_time_no_seconds` CHECK on the Postgres dialect. Even if the SQLite path silently accepts the expression (e.g., due to SQLite < 3.38 on CI), Postgres will correctly fail the constraint if the expression is malformed. The Postgres-targeted test must pass before Phase 2 is considered done.
+
+- [ ] **Step 5: Verify schema**
 
 ```powershell
 psql "host=$fqdn port=5432 dbname=mom_bot user=<your-aad-upn> sslmode=require" -c "\dt"
@@ -557,7 +659,17 @@ from testcontainers.postgres import PostgresContainer  # noqa: E402
 def postgres_url() -> str:
     """Spin up a throwaway Postgres 16 container and return its URL."""
     with PostgresContainer("postgres:16-alpine") as pg:
-        yield pg.get_connection_url().replace("psycopg2", "psycopg")
+        # Build the URL explicitly rather than using string-replace on
+        # get_connection_url() — the replace("psycopg2", "psycopg") pattern
+        # is fragile: if testcontainers ever changes its default driver name the
+        # replace becomes a no-op and the engine creation silently uses the wrong
+        # dialect. Explicit construction is always correct.
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        yield (
+            f"postgresql+psycopg://{pg.username}:{pg.password}"
+            f"@{host}:{port}/{pg.dbname}"
+        )
 
 
 def test_alembic_upgrade_head_postgres(postgres_url: str) -> None:
@@ -589,7 +701,11 @@ Add to the `[project.optional-dependencies]` `dev` list:
 
 Alternatively, configure a GitHub Actions `services: postgres:16` block in the CI workflow and have the test read `DATABASE_URL` from the environment. Either approach satisfies the requirement; testcontainers is simpler for local dev.
 
-- [ ] **Step 3: Commit and open Phase 2 draft PR**
+- [ ] **Step 3: Update `tests/test_alembic.py:343-376` docstring**
+
+The `test_fire_time_utc_check_rejects_nonzero_seconds` test at lines 343-376 of `tests/test_alembic.py` still passes after the 0002 rewrite. Update its docstring to note that the constraint expression is now `EXTRACT(SECOND FROM fire_time_utc) = 0` (dialect-portable since the 0002 rewrite in Phase 2), not the old `strftime`-based form.
+
+- [ ] **Step 4: Commit and open Phase 2 draft PR**
 
 ```bash
 git add migrations/versions/0002_reminders_schema.py tests/test_alembic.py pyproject.toml uv.lock tests/test_alembic_postgres.py
@@ -628,10 +744,12 @@ Artifacts introduced by PR #95 that Phase 3 will remove from `src/mom_bot/main.p
 
 Issue #94 is **already closed** (closed by PR #95 on 2026-05-17). References to "Closes #94" in this plan have been updated to "References #94 (closed by PR #95, 2026-05-17)".
 
-#### Task 3.1: Create `src/mom_bot/db.py` with token-injection engine factory
+#### Task 3.1: Add `build_session_factory` to `src/mom_bot/db/__init__.py` with token-injection engine factory
+
+`src/mom_bot/db/__init__.py` already exists and exports `Base = DeclarativeBase`. Phase 3 adds `build_session_factory` to this same file. A new top-level `src/mom_bot/db.py` must NOT be created — Python cannot have both a `db.py` module and a `db/` package at the same level, and `migrations/env.py:24` already imports `from mom_bot.db import Base`. Merging into `db/__init__.py` preserves that import without any change to `env.py`.
 
 **Files:**
-- Create: `src/mom_bot/db.py`
+- Modify: `src/mom_bot/db/__init__.py`
 - Create: `tests/test_db_token_injection.py`
 
 - [ ] **Step 1: Write the failing test first**
@@ -698,11 +816,20 @@ def test_postgres_url_injects_token_as_password() -> None:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_db_token_injection.py -v
 ```
-Expected: FAIL with `ModuleNotFoundError: No module named 'mom_bot.db'`.
+Expected: FAIL with `ImportError: cannot import name 'build_session_factory' from 'mom_bot.db'` — the package exists but `build_session_factory` is not yet defined in it.
 
-- [ ] **Step 3: Implement `src/mom_bot/db.py`**
+- [ ] **Step 3: Add `build_session_factory` to `src/mom_bot/db/__init__.py`**
+
+**Preserve `Base` export.** `migrations/env.py:24` imports `from mom_bot.db import Base` directly. Whether the implementation uses `db/__init__.py` or a new sub-module, `Base = DeclarativeBase` must remain importable as `from mom_bot.db import Base`. The safest approach is to add `build_session_factory` to `db/__init__.py` alongside the existing `Base` declaration.
+
+Append the following to `src/mom_bot/db/__init__.py` (after the existing `Base` class declaration):
 
 ```python
+# ---------------------------------------------------------------------------
+# Engine factory — added in Phase 3 (#91). The Base class above remains
+# unchanged; migrations/env.py imports it as `from mom_bot.db import Base`.
+# ---------------------------------------------------------------------------
+
 """SQLAlchemy engine + session factory with AAD-token injection for Postgres.
 
 For Postgres URLs, an AAD access token (audience
@@ -715,16 +842,24 @@ bound cited in the Entra concepts FAQ (docs/spike/2026-05-17-postgres-aad-findin
 § Charge 3). ``pool_recycle=4800`` (80 min) is set to force SQLAlchemy to
 close and recreate physical connections before the token expires. QueuePool
 does not invoke ``do_connect`` on every session checkout — only on new
-physical connections. A connection held past token TTL would receive
-``FATAL: token expired`` from the server; pool_recycle prevents that by
-closing + recreating physical connections every 80 minutes (under the
-86-minute ceiling with a 6-minute safety margin).
+physical connections — so ``pool_recycle`` is the primary guard.
+
+IMPORTANT: ``pool_recycle`` only invalidates connections on checkout, not on
+active connections mid-query. This design depends on the bot's session-per-tick
+pattern: sessions are opened and closed per scheduler tick, never held open
+across an 80-minute boundary. If a future change holds a session open longer
+(e.g. a long-running background task), the cached physical connection's token
+could be stale and the server would return ``FATAL: token expired`` on the next
+query. Document any session-lifetime change as a re-evaluation trigger for this
+design. Source: R9 in the risk register; Phase 3 decision.
+
+Connection-pool sizing: ``pool_size=10, max_overflow=5`` (15 connections max).
+The B1ms tier supports ~50 max connections; these values are empirical for the
+bot's session-per-tick pattern with one app instance (R9). Well under ceiling.
 
 For non-Postgres URLs (sqlite, used in unit tests and local dev), the hook is
-not registered and pool_recycle is not set.
+not registered and pool_recycle / pool_size are not set.
 """
-
-from __future__ import annotations
 
 import os
 
@@ -764,6 +899,8 @@ def build_session_factory(
             db_url,
             echo=False,
             pool_recycle=_POOL_RECYCLE_SECONDS,
+            pool_size=10,
+            max_overflow=5,
         )
         client_id = aad_client_id or os.environ.get("AZURE_CLIENT_ID")
         if not client_id:
@@ -794,8 +931,8 @@ Expected: both tests PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/mom_bot/db.py tests/test_db_token_injection.py
-git commit -m "feat(db): AAD-token engine factory with pool_recycle=4800 for Postgres (#91)"
+git add src/mom_bot/db/__init__.py tests/test_db_token_injection.py
+git commit -m "feat(db): AAD-token engine factory with pool_recycle=4800, pool_size=10 for Postgres (#91)"
 ```
 
 #### Task 3.2: Swap `main.py` to use new factory; remove `run_migrations`
@@ -830,9 +967,15 @@ Delete the following (added by PR #95, commit `de9b692`):
 
 Also remove the module-level docstring references to `run_migrations` in the "Startup migrations" section at the top of `main.py` (lines ~13-18), as they will be stale.
 
-- [ ] **Step 3: Remove `mock_run_migrations` fixture from `tests/test_main_wireup.py`**
+- [ ] **Step 3: Remove `run_migrations` test artifacts from `tests/test_main_wireup.py` and delete `tests/test_migrations_startup.py`**
 
 Delete the `mock_run_migrations` fixture (lines ~87-105 of `tests/test_main_wireup.py`) and remove any test assertions that reference it. Without `run_migrations` in `main.py`, the fixture suppresses nothing and its presence would cause an `AttributeError` on `patch("mom_bot.main.run_migrations")`.
+
+Additionally, **delete `tests/test_migrations_startup.py` entirely.** This file (tests A through D) patches `mom_bot.main.run_migrations` at multiple points and imports `mom_bot.main.run_migrations` directly. Once Phase 3 removes `run_migrations` from `main.py`, every test in this file becomes dead (they will raise `AttributeError: module 'mom_bot.main' has no attribute 'run_migrations'`). Remove the file rather than converting it — the behaviour it verified no longer exists by design.
+
+```bash
+git rm tests/test_migrations_startup.py
+```
 
 - [ ] **Step 4: Edit `Dockerfile` to remove Alembic artifacts**
 
@@ -863,10 +1006,79 @@ Expected: all tests PASS. Notably `tests/test_main_wireup.py` should still work 
 
 ```bash
 git add src/mom_bot/main.py tests/test_main_wireup.py Dockerfile
+git rm tests/test_migrations_startup.py
 git commit -m "refactor(main): use shared db.build_session_factory; remove run_migrations (refs #94, closed by #95) (#91)"
 ```
 
-#### Task 3.3: PR
+#### Task 3.3: GHA OIDC mini-spike — verify `mom-bot-gha` can mint an oss-rdbms token (Charge 12)
+
+This mini-spike workflow must run and pass before Phase 4 begins. It is a Phase 3 deliverable — not a Phase 4 in-flight step — because if GHA OIDC federation cannot mint a token for the `https://ossrdbms-aad.database.windows.net` audience, Phase 4 has no fallback and the deploy workflow step becomes a blocker at the worst possible moment.
+
+**Files:**
+- Create: `.github/workflows/mini-spike-postgres-oidc.yml`
+
+- [ ] **Step 1: Create the mini-spike workflow**
+
+```yaml
+# mini-spike-postgres-oidc.yml — one-off verification that the mom-bot-gha
+# federated SP can mint an AAD token for the oss-rdbms audience via OIDC.
+# Run once, verify it succeeds, then delete or disable this workflow.
+# Charge 12 of spike #101 (docs/spike/2026-05-17-postgres-aad-findings.md):
+# the spike minted tokens using a user identity, not the federated SP.
+name: "Mini-spike: Postgres OIDC token"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  verify-oidc-token:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_GHA }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Mint oss-rdbms AAD token
+        run: |
+          TOKEN=$(az account get-access-token \
+            --resource https://ossrdbms-aad.database.windows.net \
+            --query accessToken -o tsv)
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Token is empty — oss-rdbms audience not supported for this SP"
+            exit 1
+          fi
+          # Print first 20 chars to confirm non-empty without leaking full token.
+          echo "Token prefix: ${TOKEN:0:20}..."
+          echo "Token length: ${#TOKEN}"
+```
+
+- [ ] **Step 2: Trigger the workflow via `workflow_dispatch`**
+
+```bash
+gh workflow run mini-spike-postgres-oidc.yml
+gh run watch
+```
+
+Expected: the "Mint oss-rdbms AAD token" step exits 0 and prints a token prefix + length.
+
+- [ ] **Step 3: Record the result**
+
+Update the `unverified:` Charge 12 entry in § 10 to either:
+- `VERIFIED — GHA OIDC federation mints oss-rdbms token for mom-bot-gha SP` (if it passed), or
+- `BLOCKED — Charge 12 failed; see [run link]; Phase 4 cannot proceed until resolved` (if it failed).
+
+Phase 4 **must not begin** until this item is resolved.
+
+#### Task 3.4: PR
 
 - [ ] **Step 1: Push and open draft PR**
 
@@ -882,13 +1094,16 @@ gh pr create --draft --title "feat(db): AAD-token engine + remove startup migrat
 - [ ] Container image still builds (`docker build .`).
 - [ ] `Dockerfile` no longer has `COPY alembic.ini` or `COPY migrations/` lines.
 - [ ] `pool_recycle=4800` is present in the SQLAlchemy engine config for Postgres URLs.
+- [ ] `pool_size=10, max_overflow=5` are set on the engine for Postgres URLs.
 
 ---
 
 ### Phase 4 — Cutover (deploy workflow runs alembic; KV secret swap; revision restart)
 
 **Goal:** Production runtime swings from broken-SQLite-on-AzureFile to working-Postgres. Done when `ca-mom-bot` is healthy on Postgres for at least one reminder tick.
-**Entry criteria:** Phases 1-3 merged.
+**Entry criteria:** Phases 1-3 merged, AND:
+- **Charge 12 mini-spike has passed** — GHA OIDC federated identity (`mom-bot-gha` SP) has verified that `az account get-access-token --resource https://ossrdbms-aad.database.windows.net` mints a token under the federated identity (Task 3.3 in Phase 3). The § 10 `unverified:` entry for Charge 12 must read `VERIFIED` before Phase 4 may begin. If Charge 12 failed, stop and resolve the federation configuration before proceeding.
+
 **Exit criteria:**
 - `deploy.yml` runs `alembic upgrade head` successfully against prod Postgres.
 - `prod-database-url` KV secret holds the Postgres DSN (`postgresql+psycopg://...`).
@@ -904,18 +1119,18 @@ gh pr create --draft --title "feat(db): AAD-token engine + remove startup migrat
 
 Insert the following steps after `Verify image exists in GHCR` (around line 60) and before `Deploy container image to prod`:
 
-```yaml
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+**Dependency note (F10):** `alembic.ini` and `migrations/` are sourced from the GHA runner's `actions/checkout` of this repo, not from the deployed image (Phase 3 removed them from the image). The `actions/checkout` step must remain in the workflow and must be pinned to the same commit SHA being deployed so that migrations and image are in lockstep.
 
-      - name: Install Alembic + psycopg
-        run: |
-          pip install --quiet \
-            'alembic>=1.13,<2' \
-            'sqlalchemy>=2,<3' \
-            'psycopg[binary]>=3.2,<4'
+```yaml
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+
+      - name: Install Python deps from uv.lock
+        run: uv sync --frozen --no-dev
+        # uv.lock is materialized in the image per § 9 dep-pinning Option A;
+        # the deploy workflow also uses it for the migration step.
+        # This installs alembic, sqlalchemy, psycopg[binary] from the locked
+        # versions — same as what the container image runs.
 
       - name: Resolve Postgres FQDN
         id: pg
@@ -964,7 +1179,7 @@ Insert the following steps after `Verify image exists in GHCR` (around line 60) 
             --resource-type oss-rdbms \
             --query accessToken -o tsv)
           export PGPASSWORD
-          alembic upgrade head
+          uv run alembic upgrade head
 
       - name: Remove transient firewall rule
         if: always()
@@ -978,7 +1193,7 @@ Insert the following steps after `Verify image exists in GHCR` (around line 60) 
 
 **Note on `PGPASSWORD` injection:** PGPASSWORD-with-AAD-token through psycopg3 against Flexible Server confirmed working in spike #101. Token format: 2234-char JWT, resource `https://ossrdbms-aad.database.windows.net`. Source: `docs/spike/2026-05-17-postgres-aad-findings.md` § Charge 2 (VERIFIED).
 
-**Note on GHA OIDC federation (Charge 12 — still unverified):** spike #101 minted the token using a user identity (`az account get-access-token` on the operator's machine). Whether the same token resource works via GHA OIDC federation with the `mom-bot-gha` federated SP is **not yet verified**. Before merging Phase 4, run a one-off mini-spike: create a minimal GHA workflow that runs `az account get-access-token --resource https://ossrdbms-aad.database.windows.net` under the federated `mom-bot-gha` SP and verify it returns a token. This is a 5-minute workflow run at approximately $0.
+**Note on GHA OIDC federation (Charge 12):** The mini-spike workflow (`mini-spike-postgres-oidc.yml`) was run as a Phase 3 deliverable (Task 3.3). If it passed, Charge 12 is verified and this note is informational only. If Phase 4 is being executed and Charge 12 is still marked `unverified:` in § 10, **stop and run the mini-spike first** — merging Phase 4 without verifying OIDC token acquisition means the `alembic upgrade head` step will fail on the first deploy run with no fallback path.
 
 - [ ] **Step 2: Lint the workflow**
 
@@ -1116,6 +1331,8 @@ git add infra/main.bicep infra/modules/containerapp.bicep
 git commit -m "chore(infra): remove AzureFile/storage wiring (superseded by Postgres) (#91)"
 ```
 
+**Ordering note:** The `git ls-tree main -- infra/modules/storage.bicep` empty criterion in § 7 (Definition of Done) only becomes true after this step lands on `main`. Not before — any earlier phase's `main` state still contains `storage.bicep` because it was not yet removed. The Definition of Done check must be run post-merge of the Phase 5 PR.
+
 #### Task 5.2: Update docs
 
 **Files:**
@@ -1203,10 +1420,10 @@ EOF
 | R3 | AAD admin assignment race — Postgres provisioned but `administrators` resource fails | Low | Medium (server orphaned, no one can connect) | Bicep resource ordering: `administrators` declares `parent: pg`, so it's implicitly ordered after server creation. If the AAD admin resource fails, redeploy is idempotent. Worst case: manually run `az postgres flexible-server ad-admin create`. Propagation lag: <60 s observed in spike #101 (docs/spike/2026-05-17-postgres-aad-findings.md § Bonus Finding 5). |
 | R4 | Burstable B1ms credit exhaustion under unexpected load | Medium | Medium (transient connection failures during credit-empty windows per [concepts-compute](https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-compute) (fetched 2026-05-16)) | Set up an Azure Monitor alert on `CPU Credits Remaining < 30` post-Phase 4 (track in a follow-up issue, not blocking #91). For a Discord bot's load profile this is very unlikely. |
 | R5 | KV secret swap and revision restart out of order — bot starts on old secret | Low | Low (one revision restart fixes it) | KV secret references resolve at revision-create time; the deploy workflow's `az containerapp update` creates a new revision so the swap is automatic. Verify in Task 4.3 Step 4. |
-| R6 | Container App egress IP not covered by firewall rules | Low | High (bot can't connect) | With the pivot away from `0.0.0.0`, the Container App's static outbound IP (visible in CAE properties — `staticIp`) must be whitelisted explicitly. Verify at Phase 4 deploy time: if bot cannot connect, add the CAE `staticIp` as a dedicated firewall rule. This is the primary trade-off of pinning operator IPs vs. the broad Azure-services rule. |
+| R6 | Container App egress IP not covered by firewall rules | Low → MITIGATED (Phase 1) | High (bot can't connect) | Mitigated proactively in Phase 1 Task 1.4: the CAE static egress IP is looked up via `az containerapp env show -n cae-mom-bot -g mom-bot --query 'properties.staticIp' -o tsv` and emitted as a named firewall rule `allow-cae-egress` in `postgres.bicep`. Phase 4 verification: confirm `allow-cae-egress` rule still matches the current `properties.staticIp` value (the IP is static but worth a sanity check at cutover time). |
 | R7 | Microsoft.Graph provider registration required for `administrators` resource | RESOLVED — NOT APPLICABLE | Verified 2026-05-17: `az provider show -n Microsoft.Graph` returns `InvalidResourceNamespace` — Microsoft.Graph is not a registerable Azure resource provider. The `administrators` resource does not require it. No registration step needed. |
 | R8 | AAD admin propagation delay blocks first migration run | Low (bounded) | Low | Spike #101 observed <60 s end-to-end (docs/spike/2026-05-17-postgres-aad-findings.md § Bonus Finding 5). Phase 4 deploy workflow includes a `sleep 60` after Entra admin assignment. Risk remains on the register but the stop-loss narrows from "minutes-to-5min" to ≤ 60 s observed ceiling. |
-| R9 | Connection pool exhaustion — B1ms supports ~50 max connections | Low | Medium | Configure `pool_size=10, max_overflow=5` in the SQLAlchemy engine config (Phase 3 deliverable — add to `db.py`). These values are empirical for the bot's session-per-tick pattern with one app instance. Well under the B1ms connection ceiling. |
+| R9 | Connection pool exhaustion — B1ms supports ~50 max connections | Low | Medium | Configure `pool_size=10, max_overflow=5` in the SQLAlchemy engine config (Phase 3 deliverable — implemented in `src/mom_bot/db/__init__.py` `build_session_factory`). These values are empirical for the bot's session-per-tick pattern with one app instance. Well under the B1ms connection ceiling. |
 | R10 | UAMI display-name binding rule — Postgres role name must match Entra admin `principalName` | Low (easy to misconfigure) | Medium (auth failure at connect) | Phase 1 documentation item: the `principalName` set in `postgres.bicep` must exactly match the UAMI display name. Verify before Phase 1 deploy. Cite: [Microsoft Entra auth for PostgreSQL](https://learn.microsoft.com/en-us/azure/postgresql/security/security-entra-concepts) (fetched 2026-05-16). |
 
 ---
@@ -1230,7 +1447,7 @@ EOF
 - [ ] `closes #91` in the Phase 5 PR body (plain text, not in backticks — per `CLAUDE.md § Pull Requests`).
 - [ ] Postgres server `pg-mombot-*` running, ca-mom-bot healthy on it.
 - [ ] `git ls-tree main -- infra/modules/storage.bicep` empty.
-- [ ] `git grep -n "run_migrations\|mom-bot-data\|stomombot\|AzureFile\|sqlite:///.*/data" -- src/ infra/ migrations/` returns only intentional matches (the test fixtures in `tests/` remain — by design).
+- [ ] `git grep -n "run_migrations\|mom-bot-data\|stomombot\|AzureFile\|sqlite:///.*/data" -- src/ infra/ migrations/` returns only intentional matches (the `run_migrations` test files in `tests/` are deleted in Phase 3 Task 3.2 — zero matches in `tests/` is expected after Phase 3).
 - [ ] Bot has run for ≥ 7 days on Postgres without DB-related errors.
 - [ ] This plan file deleted per `CLAUDE.md § Document Files / Lifecycle: delete plan files when done`.
 
@@ -1276,12 +1493,12 @@ All Microsoft Learn URLs fetched 2026-05-16 unless noted.
 - [Azure file share soft delete](https://learn.microsoft.com/en-us/azure/storage/files/storage-files-prevent-file-share-deletion) — 7-day default retention; deletion succeeds immediately; purge procedure.
 - **Spike #101 findings:** `docs/spike/2026-05-17-postgres-aad-findings.md` — end-to-end PGPASSWORD+AAD-token verification (Charge 2), 86-min observed token TTL (Charge 3), strftime CHECK failure (Charge 5), SQLAlchemy scheme requirement (Bonus 1), guest-UPN encoding (Bonus 2), az CLI ≥ 2.86 requirement (Bonus 3), 0.0.0.0 public-access semantics (Bonus 4), <60 s AAD admin propagation (Bonus 5).
 - **verified-cost:** Throwaway B1ms ran ~30 minutes at < $0.20 USD total (spike #101 § Cost, 2026-05-17). Annual estimate for a continuously-running B1ms: ~$13–15/mo at eastus2 rates.
-- Repo refs: `infra/modules/storage.bicep:1-78`, `infra/modules/containerapp.bicep:120-131,166-173,201-205`, `infra/main.bicep:82-94,113`, `src/mom_bot/main.py:51-52,73,76-105,206` (run_migrations artifacts added by PR #95), `migrations/versions/0002_reminders_schema.py` (strftime CHECK on lines ~65-68), `migrations/versions/b2_member_role_sync_state.py`, `pyproject.toml:10-20`, `.github/workflows/deploy.yml`, `tests/test_alembic.py`, `tests/test_main_wireup.py:87-105` (mock_run_migrations fixture).
+- Repo refs: `infra/modules/storage.bicep:1-78`, `infra/modules/containerapp.bicep:120-131,166-173,201-205`, `infra/main.bicep:82-94,113`, `src/mom_bot/main.py:51-52,73,76-105,206` (run_migrations artifacts added by PR #95), `src/mom_bot/db/__init__.py` (existing package — `Base` export; Phase 3 adds `build_session_factory` here), `migrations/versions/0002_reminders_schema.py` (strftime CHECK on lines ~65-68), `migrations/versions/b2_member_role_sync_state.py`, `migrations/env.py:24` (`from mom_bot.db import Base` — must remain valid after Phase 3), `pyproject.toml:10-20`, `.github/workflows/deploy.yml`, `tests/test_alembic.py:343-376` (fire_time_utc CHECK test), `tests/test_main_wireup.py:87-105` (mock_run_migrations fixture), `tests/test_migrations_startup.py` (all tests dead after Phase 3 removes run_migrations).
 - GitHub refs: #91 (this epic), #90 (snapshot — superseded), #93 (networkAcls — rescoped), #94 (startup migrations — CLOSED by PR #95, 2026-05-17), #83 (deploy workflow — partially addressed), #87 / #92 (SQLite stopgap PRs — reverted in effect), #84 / #86 (UAMI + AZURE_CLIENT_ID pattern — reused), #95 (added run_migrations — removed by Phase 3), #101 (spike — merged, findings at docs/spike/2026-05-17-postgres-aad-findings.md), commit `de9b692` (PR #95 fix).
 
 ### Items marked `unverified:`
 
-- Charge 12 / GHA federated identity: spike used a user identity, not the federated `mom-bot-gha` SP. Still unverified that `az account get-access-token --resource https://ossrdbms-aad.database.windows.net` works under GHA OIDC. Phase 4 mini-spike required before cutover.
+- Charge 12 / GHA federated identity: spike used a user identity, not the federated `mom-bot-gha` SP. Still unverified that `az account get-access-token --resource https://ossrdbms-aad.database.windows.net` works under GHA OIDC. **Phase 3 Task 3.3 is the verification gate** — the mini-spike workflow must pass and this item updated to `VERIFIED` before Phase 4 may begin. This is now a hard Phase 4 entry criterion.
 - #96 current state — needs check at Phase 5 time.
 
 ---
@@ -1314,3 +1531,27 @@ All Microsoft Learn URLs fetched 2026-05-16 unless noted.
 | az CLI ≥ 2.86 | RESOLVED — added as Phase 1 prerequisite |
 | `--public-access 0.0.0.0` semantics | RESOLVED — see Charge 4 above |
 | AAD admin propagation <60 s | RESOLVED — R8 updated; `sleep 60` hedge added to Phase 4 deploy workflow step; propagation window tightened |
+
+---
+
+## 12. Review Response — 2026-05-17 (Project-Reviewer Pass, 13 + 2 findings)
+
+### Findings reconciliation
+
+| Finding | Severity | Status | Resolution |
+|---------|----------|--------|------------|
+| F1 — `db.py` vs `db/` package conflict | BLOCKING | RESOLVED | Task 3.1 changed from "Create: `src/mom_bot/db.py`" to "Modify: `src/mom_bot/db/__init__.py`". Failing-test expectation updated from `ModuleNotFoundError` to `ImportError: cannot import name 'build_session_factory'`. Patch paths (`mom_bot.db.*`) remain valid — `db/__init__.py` is the `mom_bot.db` module. |
+| F2 — `pool_size` / `max_overflow` absent from code block | BLOCKING | RESOLVED | `pool_size=10, max_overflow=5` added to the `create_engine(...)` call in Task 3.1 Step 3. Phase 3 acceptance criteria checklist now includes both values. |
+| F3 — CAE egress IP discovered too late (Phase 4) | BLOCKING | RESOLVED | Task 1.4 added to Phase 1: looks up `cae-mom-bot` `properties.staticIp`, adds `caeEgressIp` param to `postgres.bicep`, emits a named `allow-cae-egress` firewall rule. Phase 1 acceptance criteria updated. R6 updated to "MITIGATED (Phase 1)". Phase 4 step downgraded to a sanity-check verification. |
+| F4 — Charge 12 mini-spike inside Phase 4 (no fallback) | BLOCKING | RESOLVED | Mini-spike workflow (`mini-spike-postgres-oidc.yml`) moved to Phase 3 Task 3.3 as a required deliverable. Phase 4 entry criteria now include "Charge 12 mini-spike has passed." Phase 4 Task 4.1 note updated to reflect pre-condition status. § 10 `unverified:` entry updated. |
+| F5 — SQLite 3.38 constraint | CONCERN | RESOLVED | Task 2.1 Step 2 added: verify `sqlite3.sqlite_version ≥ 3.38` on CI runner; if below, use dialect-branch fallback; note that `test_alembic_postgres.py` is the authoritative enforcement regardless. |
+| F6 — `Base` export preservation | CONCERN | RESOLVED | Explicit preservation note added to Task 3.1 Step 3 header. Task 3.1 restructured around `db/__init__.py` with `Base` co-located. |
+| F7 — bare `pip install` in deploy workflow | CONCERN | RESOLVED | Phase 4 Task 4.1 Step 1 replaces `pip install --quiet '...'` block with `astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b` (v8.1.0 — commit SHA, not tag object) + `uv sync --frozen --no-dev` + `uv run alembic upgrade head`. SHA verified via `gh api repos/astral-sh/setup-uv/git/ref/tags/v8.1.0` (commit type, not annotated tag). |
+| F8 — `Microsoft.DBforPostgreSQL` provider registration absent | CONCERN | RESOLVED | Added to Phase 1 prerequisites as an idempotent `az provider register -n Microsoft.DBforPostgreSQL --wait` step. |
+| F9 — `pool_recycle` mid-query assumption undocumented | CONCERN | RESOLVED | Task 3.1 Step 3 module docstring (in `db/__init__.py`) now documents that `pool_recycle` only invalidates connections on checkout; depends on session-per-tick pattern; any session-lifetime change is a re-evaluation trigger. |
+| F10 — `alembic.ini` / `migrations/` sourced from `actions/checkout` | CONCERN | RESOLVED | Phase 4 Task 4.1 Step 1 now includes a dependency note: `alembic.ini` and `migrations/` come from the `actions/checkout` step; removing it would break the migration; workflow checkout must be pinned to the same commit SHA being deployed. |
+| F11 — `test_alembic.py:343-376` docstring stale | NIT | RESOLVED | Task 2.3 Step 3 added: update docstring of `test_fire_time_utc_check_rejects_nonzero_seconds` to note constraint expression is now `EXTRACT(SECOND FROM fire_time_utc) = 0`. |
+| F12 — Phase 5 `git ls-tree` criterion ordering | NIT | RESOLVED | Ordering note added after Phase 5 Task 5.1 Step 7: the `git ls-tree main -- infra/modules/storage.bicep` empty criterion is only true after the Phase 5 PR merges. |
+| F13 — testcontainers URL string-replace fragility | NIT | RESOLVED | Task 2.3 Step 1 fixture `postgres_url` rewritten to build URL explicitly from `pg.get_container_host_ip()`, `pg.get_exposed_port(5432)`, `pg.username`, `pg.password`, `pg.dbname`. |
+| Implicit-1 — missing `touches:` frontmatter | IMPLICIT | RESOLVED | YAML frontmatter block added at top of file with `touches:` (all planned files verified in repo or marked as planned new) and `skills_relevant:`. |
+| Implicit-2 — `test_migrations_startup.py` omitted from Phase 3 cleanup | IMPLICIT | RESOLVED | Task 3.2 Step 3 updated to delete `tests/test_migrations_startup.py` (all four tests patch `mom_bot.main.run_migrations` and become dead after Phase 3). `git rm` added to Task 3.2 Step 6 commit command. |
