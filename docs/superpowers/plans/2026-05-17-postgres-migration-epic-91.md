@@ -130,7 +130,7 @@ No dual-write infrastructure, no migration script, no cutover dance. **Skip the 
 - `infra/modules/postgres.bicep` — Postgres Flexible Server, firewall rules, AAD admin assignment.
 - `tests/test_db_token_injection.py` — verifies the AAD-token hook is invoked on connect and stamps `connection.password` from the credential.
 - `tests/test_alembic_postgres.py` — runs `alembic upgrade head` against a real Postgres instance (via `testcontainers-python` or GitHub Actions `services: postgres:16`) to catch dialect-specific DDL failures before they reach production.
-- `.github/workflows/mini-spike-postgres-oidc.yml` — one-off Phase 3 verification that `mom-bot-gha` federated SP can mint an oss-rdbms AAD token via GHA OIDC (Charge 12). Run once; disable/delete after verification.
+- ~~`.github/workflows/mini-spike-postgres-oidc.yml`~~ — Phase 3 verification (Charge 12). Created in PR #110, dispatched once, **deleted in PR #<this>** after successful verification per plan instruction "Run once; disable/delete after verification."
 
 ### Modified files
 
@@ -1513,7 +1513,7 @@ All Microsoft Learn URLs fetched 2026-05-16 unless noted.
 
 ### Items marked `unverified:`
 
-- Charge 12 / GHA federated identity: spike used a user identity, not the federated `mom-bot-gha` SP. Still unverified that `az account get-access-token --resource https://ossrdbms-aad.database.windows.net` works under GHA OIDC. **Phase 3 Task 3.3 is the verification gate** — the mini-spike workflow must pass and this item updated to `VERIFIED` before Phase 4 may begin. This is now a hard Phase 4 entry criterion.
+- ~~Charge 12 / GHA federated identity~~ **VERIFIED 2026-05-18** — mini-spike workflow (`mini-spike-postgres-oidc.yml`, PR #110) was dispatched against the `mom-bot-gha` federated SP and successfully minted a token for `https://ossrdbms-aad.database.windows.net`. Workflow deleted in PR #<this> after one successful run per plan § Phase 3 Task 3.3. Phase 4 entry criterion satisfied.
 - #96 current state — needs check at Phase 5 time.
 
 ---
@@ -1535,7 +1535,7 @@ All Microsoft Learn URLs fetched 2026-05-16 unless noted.
 | 9 — R7 Microsoft.Graph provider | RESOLVED — NOT APPLICABLE | Verified 2026-05-17: `az provider show -n Microsoft.Graph` returns `InvalidResourceNamespace`. Provider is not registerable for Postgres `administrators` resource. R7 updated in risk register. |
 | 10 — B1ms PITR retention `backupRetentionDays: 7` | RESOLVED | Confirmed valid: `az postgres flexible-server create --help` states range 7–35 days. R10 (UAMI display-name) added to risk register as documentation item. `backupRetentionDays: 7` cited in Bicep comment. |
 | 11 — ~$13/mo pricing | RESOLVED | Changed from `unverified:` to `verified-cost:` in Sources Index § 10. Spike #101 observed <$0.20 for 30 min. Extrapolated to ~$13-15/mo; marker changed to `verified-cost:`. |
-| 12 — GHA federated identity / oss-rdbms audience | DEFERRED — still unverified | Spike used user identity, not federated SP. Phase 4 mini-spike added to Task 4.1 Step 1. Charge 12 remains in `unverified:` section of § 10. |
+| 12 — GHA federated identity / oss-rdbms audience | VERIFIED 2026-05-18 | Mini-spike workflow (Phase 3 Task 3.3, PR #110) dispatched successfully against `mom-bot-gha` federated SP; oss-rdbms audience token mints under OIDC. Workflow deleted after one-shot use. |
 
 ### Bonus findings from spike — incorporated
 
