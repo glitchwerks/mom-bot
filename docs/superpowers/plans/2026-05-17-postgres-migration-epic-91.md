@@ -130,7 +130,7 @@ No dual-write infrastructure, no migration script, no cutover dance. **Skip the 
 - `infra/modules/postgres.bicep` — Postgres Flexible Server, firewall rules, AAD admin assignment.
 - `tests/test_db_token_injection.py` — verifies the AAD-token hook is invoked on connect and stamps `connection.password` from the credential.
 - `tests/test_alembic_postgres.py` — runs `alembic upgrade head` against a real Postgres instance (via `testcontainers-python` or GitHub Actions `services: postgres:16`) to catch dialect-specific DDL failures before they reach production.
-- ~~`.github/workflows/mini-spike-postgres-oidc.yml`~~ — Phase 3 verification (Charge 12). Created in PR #110, dispatched once, **deleted in PR #<this>** after successful verification per plan instruction "Run once; disable/delete after verification."
+- ~~`.github/workflows/mini-spike-postgres-oidc.yml`~~ — Phase 3 verification (Charge 12). Created in PR #110, dispatched once, **deleted in PR #111** after successful verification per plan instruction "Run once; disable/delete after verification."
 
 ### Modified files
 
@@ -1513,7 +1513,7 @@ All Microsoft Learn URLs fetched 2026-05-16 unless noted.
 
 ### Items marked `unverified:`
 
-- ~~Charge 12 / GHA federated identity~~ **VERIFIED 2026-05-18** — mini-spike workflow (`mini-spike-postgres-oidc.yml`, PR #110) was dispatched against the `mom-bot-gha` federated SP and successfully minted a token for `https://ossrdbms-aad.database.windows.net`. Workflow deleted in PR #<this> after one successful run per plan § Phase 3 Task 3.3. Phase 4 entry criterion satisfied.
+- ~~Charge 12 / GHA federated identity~~ **VERIFIED 2026-05-18** — mini-spike workflow (`mini-spike-postgres-oidc.yml`, PR #110) was dispatched against the `mom-bot-gha` federated SP and successfully minted a token for `https://ossrdbms-aad.database.windows.net`. Workflow deleted in PR #111 after one successful run per plan § Phase 3 Task 3.3. Phase 4 entry criterion satisfied.
 - #96 current state — needs check at Phase 5 time.
 
 ---
