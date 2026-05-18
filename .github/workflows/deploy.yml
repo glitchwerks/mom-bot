@@ -39,6 +39,35 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Verify required KV secrets are present
+        # Fails fast if any secret has not been set before deploying the image.
+        # This guards against deploying a bot that will crash at startup because
+        # a required secret is missing.  Add new secret names here whenever a
+        # new load_secret() call is introduced in the codebase.
+        run: |
+          VAULT="kv-mombot-eastus2"
+          REQUIRED_SECRETS=(
+            "prod-discord-token"
+            "prod-guild-id"
+            "prod-reminder-channel-name"
+            "prod-reminder-mention-role-name"
+            "prod-siege-web-url"
+            "prod-siege-web-bot-token"
+          )
+          MISSING=()
+          for secret in "${REQUIRED_SECRETS[@]}"; do
+            if ! az keyvault secret show --vault-name "$VAULT" --name "$secret" \
+                  --query "id" -o tsv >/dev/null 2>&1; then
+              MISSING+=("$secret")
+            fi
+          done
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::error::Missing required KV secrets: ${MISSING[*]}"
+            echo "Set them with: az keyvault secret set --vault-name $VAULT --name <name> --value <value>"
+            exit 1
+          fi
+          echo "All required KV secrets present."
+
       - name: Resolve image SHA
         id: resolve_sha
         run: |

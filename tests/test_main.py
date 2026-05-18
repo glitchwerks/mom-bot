@@ -9,6 +9,8 @@ Design decisions:
 - ``load_secret`` is patched out so no Key Vault round-trip occurs.
 - ``discord.Interaction.response.send_message`` is mocked via AsyncMock
   because discord.py defines it as a coroutine.
+- ``make_client`` now accepts an optional ``siege_client`` parameter.
+  Tests pass a :class:`~unittest.mock.MagicMock` to avoid Key Vault calls.
 """
 
 from __future__ import annotations
@@ -61,11 +63,12 @@ def test_make_client_registers_ping_command() -> None:
     """make_client() must register a command named 'ping' in the tree.
 
     Instantiates the client without running or connecting, then inspects the
-    app_commands.CommandTree to confirm /ping was registered.
+    app_commands.CommandTree to confirm /ping was registered.  A mock
+    SiegeWebClient is passed to avoid Key Vault round-trips.
     """
     from mom_bot.main import make_client
 
-    client = make_client()
+    client = make_client(siege_client=MagicMock())
     command_names = [cmd.name for cmd in client.tree.get_commands()]
 
     assert "ping" in command_names, f"Expected 'ping' in command tree; found: {command_names!r}"
@@ -86,7 +89,7 @@ async def test_ping_response_format() -> None:
     """
     from mom_bot.main import make_client
 
-    client = make_client()
+    client = make_client(siege_client=MagicMock())
 
     # Locate the /ping command in the tree.
     ping_cmd = next(
@@ -113,3 +116,32 @@ async def test_ping_response_format() -> None:
     assert "pong!" in message, f"Expected 'pong!' in response; got: {message!r}"
     assert "version=" in message, f"Expected 'version=' in response; got: {message!r}"
     assert "uptime=" in message, f"Expected 'uptime=' in response; got: {message!r}"
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — make_client registers post-condition commands
+# ---------------------------------------------------------------------------
+
+
+def test_make_client_registers_post_condition_commands() -> None:
+    """make_client() must register the three post-condition slash commands.
+
+    Verifies that post-conditions, post-conditions-get, and
+    post-conditions-set are all present in the command tree after
+    ``make_client`` returns.  A mock SiegeWebClient is passed to avoid
+    Key Vault round-trips.
+    """
+    from mom_bot.main import make_client
+
+    client = make_client(siege_client=MagicMock())
+    command_names = {cmd.name for cmd in client.tree.get_commands()}
+
+    assert (
+        "post-conditions" in command_names
+    ), f"Expected 'post-conditions' in command tree; found: {command_names!r}"
+    assert (
+        "post-conditions-get" in command_names
+    ), f"Expected 'post-conditions-get' in command tree; found: {command_names!r}"
+    assert (
+        "post-conditions-set" in command_names
+    ), f"Expected 'post-conditions-set' in command tree; found: {command_names!r}"
