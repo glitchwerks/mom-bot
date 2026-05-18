@@ -21,4 +21,6 @@ USER mombot
 
 # `python -m mom_bot` invokes src/mom_bot/__main__.py.
 # The real Discord client will be wired in Epic 0.3 (issue #13).
-CMD ["uv", "run", "--no-sync", "python", "-m", "mom_bot"]
+# Invoke the venv's python directly — `uv run` requires a writable
+# $HOME/.cache/uv that the --system mombot user does not have (#118).
+CMD ["/app/.venv/bin/python", "-m", "mom_bot"]
