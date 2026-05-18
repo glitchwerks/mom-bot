@@ -250,6 +250,29 @@ az role assignment create `
 
 ---
 
+## Step 5.5 — Create Entra admins on Postgres (post-deploy)
+
+After `az deployment sub create` completes successfully against `infra/main.bicep`,
+run the following to register `mi-mom-bot` and `mom-bot-gha` as Entra admins on the
+Postgres server. This step replaces the `administrators` resources that used to live
+in `infra/modules/postgres.bicep`; they were moved here because the ARM resource
+races against the server's post-provision Updating window (issue #106).
+
+```bash
+RESOURCE_GROUP=mom-bot \
+POSTGRES_SERVER_NAME=<from main.bicepparam — e.g. pg-mombot-flkrgslirk53q> \
+UAMI_OBJECT_ID=$(az identity show -g mom-bot -n mi-mom-bot --query principalId -o tsv) \
+UAMI_DISPLAY_NAME=mi-mom-bot \
+GHA_SP_OBJECT_ID=$(az ad sp show --id $AZURE_CLIENT_ID --query id -o tsv) \
+GHA_SP_DISPLAY_NAME=mom-bot-gha \
+bash infra/scripts/create-entra-admins.sh
+```
+
+The script is idempotent — safe to re-run. Phase 4 of #91 will fold this call
+into `deploy.yml` so operators do not need to run it by hand.
+
+---
+
 ## Step 6 — Set GitHub repo variables
 
 These are **Variables** (not Secrets — they are non-sensitive OIDC identifiers).
@@ -484,6 +507,7 @@ az deployment sub create `
 - [ ] Step 4 — `$env:GHA_SP_OBJECT_ID` exported in session
 - [ ] Step 4.5 (one-time) — Custom role `Mom-bot GHA Subscription Deployer` created and assigned to `mom-bot-gha` at subscription scope
 - [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)
+- [ ] Step 5.5 — Entra admins created on Postgres via `infra/scripts/create-entra-admins.sh`
 - [ ] Step 6 — Repo variables set in GitHub
 - [ ] Step 7 — Grant yourself Key Vault Secrets Officer for seeding
 - [ ] Step 8 — Initial secrets seeded

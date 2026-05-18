@@ -99,7 +99,6 @@ module postgres 'modules/postgres.bicep' = {
     tenantId: tenantId
     managedIdentityPrincipalId: identity.outputs.principalId
     managedIdentityName: managedIdentityName
-    ghaServicePrincipalObjectId: ghaServicePrincipalObjectId
     operatorIpAddress: operatorIpAddress
     caeEgressIp: caeEgressIp
   }

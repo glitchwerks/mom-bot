@@ -8,13 +8,10 @@
 //   bursts on reminder ticks). Revisit if we ever see CPU credit exhaustion
 //   on the "CPU Credits Remaining" metric.
 //
-// Auth: Microsoft Entra ID only. passwordAuth = 'Disabled'. The user-assigned
-//   managed identity mi-mom-bot is set as the Entra admin (it is the runtime
-//   principal — bot connects via token). The GHA service principal mom-bot-gha
-//   is also added as Entra admin so the deploy workflow can run
-//   `alembic upgrade head`. Multiple Entra admins are supported per
-//   https://learn.microsoft.com/en-us/azure/postgresql/security/security-entra-concepts
-//   (fetched 2026-05-16).
+// Auth: Microsoft Entra ID only. passwordAuth = 'Disabled'. Entra admins
+//   (mi-mom-bot + mom-bot-gha) are created post-deploy by
+//   infra/scripts/create-entra-admins.sh to avoid the admin-race error on
+//   initial provision. See issue #106.
 //
 // Networking: Public access + specific firewall rules. AllowAllAzureServices
 //   (0.0.0.0) is NOT used — it admits all Azure tenant IPs (spike #101 §
@@ -41,12 +38,6 @@ param managedIdentityPrincipalId string
 
 @description('Display name of the UAMI (used as the Entra admin login name).')
 param managedIdentityName string
-
-@description('Principal ID of the GHA service principal to also set as Entra admin (for alembic upgrade from CI).')
-param ghaServicePrincipalObjectId string
-
-@description('Display name of the GHA SP.')
-param ghaServicePrincipalName string = 'mom-bot-gha'
 
 @description('Operator egress IP address to whitelist in the firewall (single IP; update if the operator\'s IP changes).')
 param operatorIpAddress string
@@ -117,27 +108,12 @@ resource fwCae 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-
   }
 }
 
-// Entra admin: mi-mom-bot (runtime).
-resource adminUami 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08-01' = {
-  parent: pg
-  name: managedIdentityPrincipalId
-  properties: {
-    principalType: 'ServicePrincipal'
-    principalName: managedIdentityName
-    tenantId: tenantId
-  }
-}
-
-// Entra admin: mom-bot-gha (alembic upgrade from CI).
-resource adminGha 'Microsoft.DBforPostgreSQL/flexibleServers/administrators@2024-08-01' = {
-  parent: pg
-  name: ghaServicePrincipalObjectId
-  properties: {
-    principalType: 'ServicePrincipal'
-    principalName: ghaServicePrincipalName
-    tenantId: tenantId
-  }
-}
+// Entra admins (mi-mom-bot + mom-bot-gha) are NOT declared here. They are
+// created post-deploy by infra/scripts/create-entra-admins.sh because the
+// `Microsoft.DBforPostgreSQL/flexibleServers/administrators` resource races
+// against the server's post-provision Updating window, producing
+// `AadAuthOperationCannotBePerformedWhenServerIsNotAccessible` on initial
+// deploy. See issue #106 for the full diagnosis and option comparison.
 
 @description('Server name of the provisioned Postgres Flexible Server.')
 output serverName string = pg.name
