@@ -76,15 +76,15 @@ def downgrade() -> None:
 
     op.alter_column(
         "reminders",
-        "role_mention_id",
-        existing_type=sa.BigInteger(),
-        type_=sa.Integer(),
-        existing_nullable=True,
-    )
-    op.alter_column(
-        "reminders",
         "channel_id",
         existing_type=sa.BigInteger(),
         type_=sa.Integer(),
         existing_nullable=False,
+    )
+    op.alter_column(
+        "reminders",
+        "role_mention_id",
+        existing_type=sa.BigInteger(),
+        type_=sa.Integer(),
+        existing_nullable=True,
     )
