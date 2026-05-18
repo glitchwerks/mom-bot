@@ -69,3 +69,9 @@ ignore_missing_imports = true
 pythonpath = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "psycopg[binary]>=3.3.4",
+    "testcontainers[postgresql]>=4.14.2",
+]

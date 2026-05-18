@@ -1,4 +1,4 @@
-"""reminders schema
+"""reminders schema — dialect-portable via runtime branch
 
 Creates the ``reminders`` and ``reminder_sent`` tables for the Epic 1
 Discord reminder scheduler (plan §§ 4).
@@ -8,8 +8,24 @@ the bot on first boot from Key Vault values (see plan § 4 Seed-on-boot).
 
 Constraints included:
 
-- ``reminders.fire_time_utc`` CHECK: seconds component must be zero
-  (SQLite-compatible predicate using ``strftime``).
+- ``reminders.fire_time_utc`` CHECK: seconds component must be zero.
+  The expression is chosen at migration runtime based on the active
+  dialect (see ``_fire_time_check_expr``):
+
+  * SQLite: ``CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0``
+    SQLite has no ``EXTRACT(… FROM …)`` syntax; strftime is the
+    idiomatic substitute.
+  * PostgreSQL: ``EXTRACT(SECOND FROM fire_time_utc) = 0``
+    PostgreSQL does not support strftime.
+
+  Both expressions enforce the same predicate and are valid in their
+  respective dialects.  A single cross-dialect SQL expression does not
+  exist for this check — the "single expression" hypothesis was
+  empirically falsified during the Phase 2 spike (issue #107); SQLite
+  raises ``OperationalError: near "FROM": syntax error`` when given raw
+  ``EXTRACT(SECOND FROM …)`` at any SQLite version.  See issue #91 for
+  the broader Postgres-portability context.
+
 - ``reminders.weekday`` CHECK: value must be in the range 0-6 (Mon-Sun).
 - ``reminder_sent`` UNIQUE (reminder_id, fire_date_utc): at most one sent
   record per reminder per UTC calendar day.
@@ -33,6 +49,23 @@ revision: str = "0002_reminders_schema"
 down_revision: str | Sequence[str] | None = "2f03efc88bf2"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+
+
+def _fire_time_check_expr() -> str:
+    """Return the dialect-appropriate CHECK expression for fire_time_utc.
+
+    SQLite has no ``EXTRACT(… FROM …)`` syntax; PostgreSQL has no
+    ``strftime``.  Both expressions enforce the same predicate: the seconds
+    component of ``fire_time_utc`` must be zero.
+
+    Returns:
+        A SQL string suitable for use in a ``CheckConstraint`` on the
+        active database dialect.
+    """
+    bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        return "CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0"
+    return "EXTRACT(SECOND FROM fire_time_utc) = 0"
 
 
 def upgrade() -> None:
@@ -61,7 +94,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("name", name="uq_reminders_name"),
         sa.CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),
         sa.CheckConstraint(
-            "CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0",
+            _fire_time_check_expr(),
             name="ck_fire_time_no_seconds",
         ),
     )
