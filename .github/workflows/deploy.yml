@@ -58,6 +58,74 @@ jobs:
           fi
           echo "Image exists: ghcr.io/glitchwerks/mom-bot:$SHA"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
+
+      - name: Install Python deps from uv.lock
+        run: uv sync --frozen --no-dev
+        # uv.lock is materialized in the image per § 9 dep-pinning Option A;
+        # the deploy workflow also uses it for the migration step.
+        # This installs alembic, sqlalchemy, psycopg[binary] from the locked
+        # versions — same as what the container image runs.
+
+      - name: Resolve Postgres FQDN
+        id: pg
+        run: |
+          FQDN=$(az postgres flexible-server list \
+            --resource-group mom-bot \
+            --query "[?starts_with(name,'pg-mombot-')].fullyQualifiedDomainName | [0]" \
+            -o tsv)
+          if [ -z "$FQDN" ]; then
+            echo "::error::No pg-mombot-* server found in resource group mom-bot."
+            exit 1
+          fi
+          echo "fqdn=$FQDN" >> "$GITHUB_OUTPUT"
+
+      - name: Add transient firewall rule for runner IP
+        id: fw
+        run: |
+          RUNNER_IP=$(curl -sf https://api.ipify.org)
+          RULE_NAME="gha-runner-$(date +%s)"
+          SERVER=$(echo "${{ steps.pg.outputs.fqdn }}" | cut -d. -f1)
+          az postgres flexible-server firewall-rule create \
+            --resource-group mom-bot \
+            --name "$SERVER" \
+            --rule-name "$RULE_NAME" \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP"
+          echo "rule_name=$RULE_NAME" >> "$GITHUB_OUTPUT"
+          echo "server=$SERVER" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for AAD admin propagation
+        run: sleep 60
+        # Spike #101 observed <60 s end-to-end latency for Entra admin
+        # assignment to propagate. Hedge: sleep 60 s before first migration
+        # attempt. Source: docs/spike/2026-05-17-postgres-aad-findings.md
+        # § Bonus Finding 5.
+
+      - name: Run alembic upgrade head
+        env:
+          # AAD token injected via PGPASSWORD; psycopg3 reads it from env.
+          # Token TTL: ~86 min observed (spike #101 § Charge 3). The deploy
+          # job runs end-to-end in well under 86 min so no refresh is needed.
+          MOM_BOT_DATABASE_URL: >-
+            postgresql+psycopg://mom-bot-gha@${{ steps.pg.outputs.fqdn }}:5432/mom_bot?sslmode=require
+        run: |
+          PGPASSWORD=$(az account get-access-token \
+            --resource https://ossrdbms-aad.database.windows.net \
+            --query accessToken -o tsv)
+          export PGPASSWORD
+          uv run alembic upgrade head
+
+      - name: Remove transient firewall rule
+        if: always() && steps.fw.outputs.rule_name != ''
+        run: |
+          az postgres flexible-server firewall-rule delete \
+            --resource-group mom-bot \
+            --name "${{ steps.fw.outputs.server }}" \
+            --rule-name "${{ steps.fw.outputs.rule_name }}" \
+            --yes
+
       - name: Deploy container image to prod
         run: |
           az containerapp update \
