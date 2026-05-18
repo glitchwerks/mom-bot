@@ -21,4 +21,4 @@ USER mombot
 
 # `python -m mom_bot` invokes src/mom_bot/__main__.py.
 # The real Discord client will be wired in Epic 0.3 (issue #13).
-CMD ["python", "-m", "mom_bot"]
+CMD ["uv", "run", "--no-sync", "python", "-m", "mom_bot"]
