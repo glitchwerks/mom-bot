@@ -118,7 +118,7 @@ jobs:
           uv run alembic upgrade head
 
       - name: Remove transient firewall rule
-        if: always()
+        if: always() && steps.fw.outputs.rule_name != ''
         run: |
           az postgres flexible-server firewall-rule delete \
             --resource-group mom-bot \
