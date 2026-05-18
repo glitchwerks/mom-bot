@@ -1,0 +1,39 @@
+# mini-spike-postgres-oidc.yml — one-off verification that the mom-bot-gha
+# federated SP can mint an AAD token for the oss-rdbms audience via OIDC.
+# Run once, verify it succeeds, then delete or disable this workflow.
+# Charge 12 of spike #101 (docs/spike/2026-05-17-postgres-aad-findings.md):
+# the spike minted tokens using a user identity, not the federated SP.
+name: "Mini-spike: Postgres OIDC token"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  verify-oidc-token:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_GHA }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Mint oss-rdbms AAD token
+        run: |
+          TOKEN=$(az account get-access-token \
+            --resource https://ossrdbms-aad.database.windows.net \
+            --query accessToken -o tsv)
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Token is empty — oss-rdbms audience not supported for this SP"
+            exit 1
+          fi
+          # Print first 20 chars to confirm non-empty without leaking full token.
+          echo "Token prefix: ${TOKEN:0:20}..."
+          echo "Token length: ${#TOKEN}"
