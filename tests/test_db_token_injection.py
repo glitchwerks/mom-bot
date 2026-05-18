@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-from sqlalchemy import event
-
 from mom_bot.db import build_session_factory
 
 
@@ -37,8 +34,11 @@ def test_postgres_url_injects_token_as_password() -> None:
         def fake_listen(target, name, fn):
             listeners.append((name, fn))
 
+        def _fake_listens_for(*a: object, **kw: object):  # type: ignore[no-untyped-def]
+            return lambda f: (listeners.append(("do_connect", f)), f)[1]
+
         with patch("mom_bot.db.event.listens_for") as lf:
-            lf.side_effect = lambda *a, **kw: (lambda f: (listeners.append(("do_connect", f)), f)[1])
+            lf.side_effect = _fake_listens_for
             build_session_factory(
                 "postgresql+psycopg://mi-mom-bot@srv.postgres.database.azure.com/mom_bot?sslmode=require",
                 aad_client_id="11111111-2222-3333-4444-555555555555",

@@ -83,29 +83,6 @@ def mock_health_server() -> Any:
         yield health_mock
 
 
-@pytest.fixture(autouse=True)
-def mock_run_migrations() -> Any:
-    """Patch run_migrations for every test in this module.
-
-    ``setup_hook`` now calls ``run_migrations()`` (issue #94) which invokes
-    ``alembic.command.upgrade`` and triggers ``migrations/env.py``.  That
-    module calls ``logging.config.fileConfig``, which by default sets
-    ``.disabled = True`` on every logger that existed before the call —
-    including ``mom_bot.main``.  When disabled, CRITICAL log records are
-    never emitted, breaking the exception-logging tests (issue #53).
-
-    This module focuses on scheduler wireup and exception-logging, not
-    migration correctness.  ``test_migrations_startup.py`` owns the
-    migration wiring tests; ``test_alembic.py`` owns schema correctness.
-
-    Yields:
-        The ``MagicMock`` that replaced ``run_migrations`` so individual
-        tests can assert on it if needed.
-    """
-    with patch("mom_bot.main.run_migrations") as mock:
-        yield mock
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
