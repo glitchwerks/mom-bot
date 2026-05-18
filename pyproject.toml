@@ -29,6 +29,8 @@ dev = [
     "pip-audit",
     "time-machine",
     "anyio[trio]",
+    "testcontainers>=4.14.2",
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -69,9 +71,3 @@ ignore_missing_imports = true
 pythonpath = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[dependency-groups]
-dev = [
-    "psycopg[binary]>=3.3.4",
-    "testcontainers[postgresql]>=4.14.2",
-]

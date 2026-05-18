@@ -1043,16 +1043,12 @@ dev = [
     { name = "black" },
     { name = "mypy" },
     { name = "pip-audit" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
-    { name = "time-machine" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "psycopg", extra = ["binary"] },
     { name = "testcontainers" },
+    { name = "time-machine" },
 ]
 
 [package.metadata]
@@ -1068,20 +1064,16 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27,<1.0" },
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "pip-audit", marker = "extra == 'dev'" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "sqlalchemy", specifier = ">=2" },
+    { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=4.14.2" },
     { name = "time-machine", marker = "extra == 'dev'" },
 ]
 provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
-    { name = "testcontainers", extras = ["postgresql"], specifier = ">=4.14.2" },
-]
 
 [[package]]
 name = "msal"

@@ -155,17 +155,20 @@ class TestPostgresMigration:
     """Integration tests for migration 0002 against a live Postgres 16 instance.
 
     All tests in this class share a single container (``pg_url`` is
-    module-scoped).  Each test runs ``upgrade head`` on a fresh schema
-    because the fixture yields a unique database name.  Since the fixture
-    is module-scoped and only started once, tests that modify the schema
-    state must be self-contained.
+    module-scoped).  The schema is migrated exactly once per class via the
+    ``_migrated_schema`` autouse fixture — the container itself is the unit
+    of isolation.  Individual tests must not assume a clean schema state;
+    they assert against the already-migrated database.
     """
 
-    def test_upgrade_head_creates_expected_tables(self, pg_url: str) -> None:
-        """``alembic upgrade head`` creates all expected tables on Postgres.
+    @pytest.fixture(scope="class", autouse=True)
+    def _migrated_schema(self, pg_url: str) -> None:
+        """Run ``alembic upgrade head`` exactly once for this test class.
 
-        Asserts that ``reminders``, ``reminder_sent``, and
-        ``alembic_version`` all exist after running the full migration chain.
+        Makes the schema dependency explicit so every test in the class can
+        assume migrations have been applied, regardless of execution order.
+        No teardown is needed — the container itself is discarded when the
+        module fixture exits.
 
         Args:
             pg_url: Connection string for the ephemeral Postgres container.
@@ -173,6 +176,16 @@ class TestPostgresMigration:
         cfg = _make_pg_alembic_config(pg_url)
         command.upgrade(cfg, "head")
 
+    def test_upgrade_head_creates_expected_tables(self, pg_url: str) -> None:
+        """``alembic upgrade head`` creates all expected tables on Postgres.
+
+        Asserts that ``reminders``, ``reminder_sent``, and
+        ``alembic_version`` all exist after running the full migration chain.
+        Schema is already migrated by the ``_migrated_schema`` class fixture.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
         engine = sa.create_engine(pg_url)
         inspector = sa.inspect(engine)
         actual = set(inspector.get_table_names())
