@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Date,
     ForeignKey,
@@ -89,11 +90,11 @@ class Reminder(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
-    channel_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     weekday: Mapped[int] = mapped_column(Integer, nullable=False)
     fire_time_utc: Mapped[datetime.time] = mapped_column(Time, nullable=False)
     message_template: Mapped[str] = mapped_column(Text, nullable=False)
-    role_mention_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    role_mention_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         nullable=False, server_default=func.current_timestamp()
     )
