@@ -43,9 +43,14 @@ from discord import CheckboxGroupOption
 
 from mom_bot.post_conditions.client import SiegeWebError
 from mom_bot.post_conditions.grouping import group_by_meta
-from mom_bot.post_conditions.modal_layout import ModalPage
+from mom_bot.post_conditions.modal_layout import ModalPage, split_meta_for_modals
 
-__all__ = ["PostConditionsView", "build_summary_embed", "EditPreferencesModal"]
+__all__ = [
+    "PostConditionsView",
+    "build_summary_embed",
+    "EditPreferencesModal",
+    "EditPreferencesView",
+]
 
 # Discord modal title character limit.
 # Source: .venv/Lib/site-packages/discord/ui/modal.py docstring (L88).
@@ -528,9 +533,7 @@ class EditPreferencesModal(discord.ui.Modal):
         group: The :class:`discord.ui.CheckboxGroup` added to this modal.
         page: The :class:`~mom_bot.post_conditions.modal_layout.ModalPage`
             this modal covers.
-        parent_view: The owning view (typed as ``Any`` at module load time;
-            ``EditPreferencesView`` is not yet imported to avoid a
-            forward-reference error — see Phase 3).
+        parent_view: The owning :class:`EditPreferencesView`.
         pages: Full ``group_by_meta``-shaped pages list threaded through so
             ``on_submit`` can call :func:`_selections_to_meta_keyed` and
             :func:`build_summary_embed`.
@@ -542,7 +545,7 @@ class EditPreferencesModal(discord.ui.Modal):
         self,
         *,
         page: ModalPage,
-        parent_view: Any,
+        parent_view: EditPreferencesView,
         siege_client: Any,
         discord_id: str,
         pages: list[tuple[str, list[dict[str, Any]]]],
@@ -558,8 +561,7 @@ class EditPreferencesModal(discord.ui.Modal):
                 at most 10 entries (enforced by :class:`discord.ui.CheckboxGroup`).
             parent_view: The :class:`EditPreferencesView` that owns this
                 modal.  Must expose a ``selections: dict[int, bool]``
-                attribute.  Typed as ``Any`` here because
-                ``EditPreferencesView`` is defined in Phase 3.
+                attribute.
             siege_client: A
                 :class:`~mom_bot.post_conditions.client.SiegeWebClient`
                 instance used for the PUT call on submit.
@@ -650,3 +652,147 @@ class EditPreferencesModal(discord.ui.Modal):
         await interaction.response.edit_message(
             embed=embed, view=self.parent_view
         )
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView internal button helpers
+# ---------------------------------------------------------------------------
+
+
+class _EditMetaButton(discord.ui.Button["EditPreferencesView"]):
+    """Button that opens an EditPreferencesModal for one ModalPage sub-page.
+
+    Attributes:
+        _modal_page: The :class:`ModalPage` this button covers.
+        _parent_view: The :class:`EditPreferencesView` that owns this button.
+    """
+
+    def __init__(
+        self,
+        *,
+        page: ModalPage,
+        parent_view: EditPreferencesView,
+    ) -> None:
+        """Initialise the button for one ModalPage.
+
+        Args:
+            page: The sub-page of conditions this button opens a modal for.
+            parent_view: The owning :class:`EditPreferencesView`.
+        """
+        super().__init__(
+            label=f"Edit {page.label}",
+            style=discord.ButtonStyle.primary,
+        )
+        self._modal_page = page
+        self._parent_view = parent_view
+
+    async def callback(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Open the EditPreferencesModal for this sub-page.
+
+        Args:
+            interaction: The Discord interaction that triggered the button.
+        """
+        modal = EditPreferencesModal(
+            page=self._modal_page,
+            parent_view=self._parent_view,
+            siege_client=self._parent_view._siege_client,
+            discord_id=self._parent_view._discord_id,
+            pages=self._parent_view._pages,
+        )
+        await interaction.response.send_modal(modal)
+
+
+class _DismissButton(discord.ui.Button["EditPreferencesView"]):
+    """Button that strips buttons from the ephemeral message (keeps embed)."""
+
+    def __init__(self) -> None:
+        """Initialise the Dismiss button."""
+        super().__init__(
+            label="Dismiss",
+            style=discord.ButtonStyle.danger,
+        )
+
+    async def callback(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Remove the view from the ephemeral message, preserving the embed.
+
+        Args:
+            interaction: The Discord interaction that triggered the button.
+        """
+        await interaction.response.edit_message(view=None)
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView
+# ---------------------------------------------------------------------------
+
+
+class EditPreferencesView(discord.ui.View):
+    """Persistent ephemeral-message view with Edit buttons + Dismiss.
+
+    Holds the user's flat ``selections`` dict and exposes one
+    :class:`_EditMetaButton` per :class:`ModalPage` produced by
+    :func:`~.modal_layout.split_meta_for_modals`, plus a single
+    :class:`_DismissButton`.
+
+    Each Edit button opens an :class:`EditPreferencesModal` for its
+    sub-page.  On modal submit, ``selections`` is updated in place and
+    the ephemeral is refreshed via the parent view reference threaded
+    through the modal.
+
+    Attributes:
+        selections: Flat mapping from catalog condition id (``int``) to
+            ``bool`` — ``True`` if the condition is currently selected,
+            ``False`` otherwise.  Updated in-place by each modal submit.
+    """
+
+    def __init__(
+        self,
+        *,
+        catalog: list[dict[str, Any]],
+        preferences: list[int],
+        siege_client: Any,
+        discord_id: str,
+        timeout: float | None = 300.0,
+    ) -> None:
+        """Initialise the view from catalog data and saved preferences.
+
+        Args:
+            catalog: All available PostConditionResponse dicts from
+                ``GET /api/post-conditions``.
+            preferences: The user's currently-saved condition IDs from
+                ``GET /api/members/me/preferences``.  Used to seed
+                ``selections``.
+            siege_client: A
+                :class:`~mom_bot.post_conditions.client.SiegeWebClient`
+                instance threaded to each modal for the PUT call.
+            discord_id: The invoking user's Discord snowflake as a string.
+                Forwarded to ``siege_client.set_my_preferences`` by each
+                modal on submit.
+            timeout: View timeout in seconds.  Defaults to 300 (5 minutes).
+        """
+        super().__init__(timeout=timeout)
+
+        self._siege_client = siege_client
+        self._discord_id = discord_id
+
+        # Full group_by_meta pages for embed rendering inside modals.
+        self._pages = group_by_meta(catalog)
+
+        # Flat {id: bool} selections seeded from saved preferences.
+        preferred: set[int] = set(preferences)
+        self.selections: dict[int, bool] = {
+            int(cond["id"]): (int(cond["id"]) in preferred)
+            for cond in catalog
+        }
+
+        # One button per ModalPage sub-page.
+        self._modal_pages = split_meta_for_modals(catalog)
+        for page in self._modal_pages:
+            self.add_item(_EditMetaButton(page=page, parent_view=self))
+
+        # Dismiss button.
+        self.add_item(_DismissButton())

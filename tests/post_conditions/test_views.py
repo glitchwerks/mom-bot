@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from mom_bot.post_conditions.modal_layout import ModalPage, split_meta_for_modals
+from mom_bot.post_conditions.modal_layout import split_meta_for_modals
 from mom_bot.post_conditions.views import (
     EditPreferencesView,
     PostConditionsView,
