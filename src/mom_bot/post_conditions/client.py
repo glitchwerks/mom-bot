@@ -268,26 +268,29 @@ class SiegeWebClient:
             kwargs["json"] = json
 
         async with request(url, **kwargs) as resp:
-            if resp.status == 429:
-                _logger.warning(
-                    "siege-web returned 429 on %s %s; retrying after backoff.",
-                    method.upper(),
-                    url,
-                )
-                await asyncio.sleep(_RETRY_BACKOFF)
-                async with request(url, **kwargs) as retry_resp:
-                    if retry_resp.status == 429:
-                        raise SiegeWebRateLimitError(
-                            f"siege-web rate-limited {method.upper()} {url} "
-                            "on both initial attempt and retry."
-                        )
-                    self._raise_for_status(retry_resp.status)
-                    result: list[dict[str, Any]] = await retry_resp.json()
-                    return result
+            status = resp.status
+            if status != 429:
+                self._raise_for_status(status)
+                data: list[dict[str, Any]] = await resp.json()
+                return data
 
-            self._raise_for_status(resp.status)
-            data: list[dict[str, Any]] = await resp.json()
-            return data
+        # First context has fully exited; now log and backoff before retry.
+        _logger.warning(
+            "siege-web returned 429 on %s %s; retrying after backoff.",
+            method.upper(),
+            url,
+        )
+        await asyncio.sleep(_RETRY_BACKOFF)
+
+        async with request(url, **kwargs) as retry_resp:
+            if retry_resp.status == 429:
+                raise SiegeWebRateLimitError(
+                    f"siege-web rate-limited {method.upper()} {url} "
+                    "on both initial attempt and retry."
+                )
+            self._raise_for_status(retry_resp.status)
+            result: list[dict[str, Any]] = await retry_resp.json()
+            return result
 
     # ------------------------------------------------------------------
     # Public API
