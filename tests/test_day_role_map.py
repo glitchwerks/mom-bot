@@ -5,7 +5,7 @@ Covers the four observable behaviors called out in issue #62:
 1. Insert when table is empty (both days seeded).
 2. No-op when called twice with the same Discord state (snowflake unchanged).
 3. Snowflake-changed log + row update when a role's ID differs from the DB.
-4. Warning when a guild has no "Attack Day N" role.
+4. Warning when a guild has no "Siege - Day N Attacker" role.
 
 All tests use an in-memory SQLite database so they are fast and hermetic.
 Discord guild/role objects are mocked with ``unittest.mock.MagicMock`` using
@@ -35,9 +35,9 @@ _ROLE_ID_DAY1 = 222_000_000_000_000_001
 _ROLE_ID_DAY2 = 222_000_000_000_000_002
 _ROLE_ID_DAY1_NEW = 333_000_000_000_000_001  # simulates snowflake change
 
-_ROLE_NAME_DAY1 = "Attack Day 1"
-_ROLE_NAME_DAY2 = "Attack Day 2"
-_ROLE_NAME_DAY1_RENAMED = "Attack Day 1 (renamed)"
+_ROLE_NAME_DAY1 = "Siege - Day 1 Attacker"
+_ROLE_NAME_DAY2 = "Siege - Day 2 Attacker"
+_ROLE_NAME_DAY1_RENAMED = "Siege - Day 1 Attacker (renamed)"
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ def _make_mock_client(
 async def test_seed_inserts_when_table_empty(
     session_factory: sessionmaker[Session],
 ) -> None:
-    """Empty DB + guild with both Attack Day roles → two rows inserted.
+    """Empty DB + guild with both Siege Attacker day roles → two rows inserted.
 
     Verifies that ``seed_day_role_map`` creates one ``DayRoleMap`` row per
     attack day when the table contains no pre-existing rows.
@@ -258,10 +258,10 @@ async def test_seed_logs_warning_when_role_missing(
     session_factory: sessionmaker[Session],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Guild with no 'Attack Day 1' role → WARNING with enriched context.
+    """Guild with no 'Siege - Day 1 Attacker' role → WARNING with enriched context.
 
     Confirms that when the guild's role list does not contain a role named
-    ``"Attack Day {day}"``, the seed routine logs a WARNING containing:
+    ``"Siege - Day {day} Attacker"``, the seed routine logs a WARNING containing:
 
     - The sentinel string ``DAY_ROLE_NOT_FOUND``.
     - ``expected=`` showing the literal role name being searched for.
@@ -299,8 +299,8 @@ async def test_seed_logs_warning_when_role_missing(
     # The searched name must appear under expected=.
     assert "expected=" in combined, f"Expected 'expected=' in log message; got: {combined}"
     assert (
-        "Attack Day 1" in combined
-    ), f"Expected searched role name 'Attack Day 1' in log; got: {combined}"
+        "Siege - Day 1 Attacker" in combined
+    ), f"Expected searched role name 'Siege - Day 1 Attacker' in log; got: {combined}"
 
     # The available roles must appear under available=.
     assert "available=" in combined, f"Expected 'available=' in log message; got: {combined}"
@@ -327,7 +327,7 @@ async def test_seed_warning_available_reflects_actual_guild_roles(
     """Guild with differently-named roles → available= shows those names sorted.
 
     Simulates the name-mismatch root cause from issue #127: the guild has
-    roles but none matches ``"Attack Day {N}"``.  Verifies that
+    roles but none matches ``"Siege - Day {N} Attacker"``.  Verifies that
     ``available=`` in the WARNING log contains the guild's actual role names
     in sorted order, enabling operators to see the mismatch at a glance.
 

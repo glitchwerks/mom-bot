@@ -97,7 +97,7 @@ def seeded_factory(session_factory: sessionmaker[Session]) -> sessionmaker[Sessi
                 guild_id=_GUILD_ID,
                 day_number=1,
                 discord_role_id=_ROLE_ID_DAY1,
-                role_display_name="Attack Day 1",
+                role_display_name="Siege - Day 1 Attacker",
             )
         )
         session.add(
@@ -105,7 +105,7 @@ def seeded_factory(session_factory: sessionmaker[Session]) -> sessionmaker[Sessi
                 guild_id=_GUILD_ID,
                 day_number=2,
                 discord_role_id=_ROLE_ID_DAY2,
-                role_display_name="Attack Day 2",
+                role_display_name="Siege - Day 2 Attacker",
             )
         )
         session.commit()
@@ -216,8 +216,8 @@ async def test_assign_day1_no_prior_role_returns_applied(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     member = _make_member(held_role_ids=[])
     guild = _make_guild(
         member=member,
@@ -261,8 +261,8 @@ async def test_assign_day2_removes_day1_returns_applied(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     # Member currently holds Day 1.
     member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
     member.roles = [role_day1]  # keep same mock object for identity check
@@ -308,8 +308,8 @@ async def test_unassign_day1_member_holds_it_returns_applied(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
     member.roles = [role_day1]
     guild = _make_guild(
@@ -354,7 +354,7 @@ async def test_assign_member_not_in_guild_returns_skipped(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
     guild = _make_guild(
         member=None,  # not in guild
         roles=[role_day1],
@@ -434,8 +434,8 @@ async def test_assign_already_has_role_returns_skipped(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     # Member already holds Day 1.
     member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
     member.roles = [role_day1]
@@ -479,8 +479,8 @@ async def test_unassign_member_lacks_role_returns_skipped(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     # Member holds no day roles.
     member = _make_member(held_role_ids=[])
     guild = _make_guild(
@@ -525,8 +525,8 @@ async def test_assign_swap_remove_forbidden_returns_partial(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
     member.roles = [role_day1]
     # remove_roles raises Forbidden (403).
@@ -577,8 +577,8 @@ async def test_assign_add_forbidden_returns_failed(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1")
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2")
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker")
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker")
     member = _make_member(held_role_ids=[])
     member.add_roles = AsyncMock(
         side_effect=discord.Forbidden(
@@ -636,8 +636,8 @@ async def test_unassign_remove_forbidden_returns_failed(
     snapshot = set(svc_module._hierarchy_loss_emitted)
     svc_module._hierarchy_loss_emitted.clear()
     try:
-        role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1", position=15)
-        role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=3)
+        role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker", position=15)
+        role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker", position=3)
         member = _make_member(held_role_ids=[_ROLE_ID_DAY1])
         member.remove_roles = AsyncMock(
             side_effect=discord.Forbidden(
@@ -733,8 +733,8 @@ def test_preflight_all_ok_logs_summary(
     """
     from mom_bot.roles.service import run_preflight
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1", position=3)
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=4)
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker", position=3)
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker", position=4)
     bot_top = _make_bot_role(position=10)
     guild = _make_guild(
         member=None,
@@ -775,8 +775,8 @@ def test_preflight_hierarchy_violation_raises_config_error(
     from mom_bot.roles.service import run_preflight
 
     # Day 1 role is ranked ABOVE the bot's top role.
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1", position=15)
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=3)
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker", position=15)
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker", position=3)
     bot_top = _make_bot_role(position=10)
     guild = _make_guild(
         member=None,
@@ -820,7 +820,7 @@ def test_preflight_missing_role_logs_warning(
     from mom_bot.roles.service import run_preflight
 
     # Only Day 2 exists in the guild; Day 1 is missing.
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=3)
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker", position=3)
     bot_top = _make_bot_role(position=10)
     guild = _make_guild(
         member=None,
@@ -870,8 +870,8 @@ async def test_add_roles_forbidden_emits_hierarchy_lost_at_runtime(
     """
     from mom_bot.roles.service import apply_day_role
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1", position=15)
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=3)
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker", position=15)
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker", position=3)
     member = _make_member(held_role_ids=[])
     # add_roles raises Forbidden — simulates hierarchy violation.
     member.add_roles = AsyncMock(
@@ -935,8 +935,8 @@ async def test_hierarchy_lost_event_deduplicated_per_role(
     # Reset the in-process dedup set between test runs.
     svc_module._hierarchy_loss_emitted.clear()
 
-    role_day1 = _make_role(_ROLE_ID_DAY1, "Attack Day 1", position=15)
-    role_day2 = _make_role(_ROLE_ID_DAY2, "Attack Day 2", position=3)
+    role_day1 = _make_role(_ROLE_ID_DAY1, "Siege - Day 1 Attacker", position=15)
+    role_day2 = _make_role(_ROLE_ID_DAY2, "Siege - Day 2 Attacker", position=3)
     bot_top = _make_bot_role(position=10)
 
     async def _run() -> None:
