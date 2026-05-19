@@ -78,9 +78,7 @@ def _selections_to_meta_keyed(
     result: dict[str, set[int]] = {}
     for label, conditions in pages:
         selected: set[int] = {
-            int(cond["id"])
-            for cond in conditions
-            if selections.get(int(cond["id"]), False)
+            int(cond["id"]) for cond in conditions if selections.get(int(cond["id"]), False)
         }
         if selected:
             result[label] = selected
@@ -253,9 +251,7 @@ class EditPreferencesModal(discord.ui.Modal):
             CheckboxGroupOption(
                 label=str(cond["description"]),
                 value=str(cond["id"]),
-                default=bool(
-                    parent_view.selections.get(int(cond["id"]), False)
-                ),
+                default=bool(parent_view.selections.get(int(cond["id"]), False)),
             )
             for cond in page.conditions
         ]
@@ -297,11 +293,7 @@ class EditPreferencesModal(discord.ui.Modal):
         try:
             await self._siege_client.set_my_preferences(
                 self.discord_id,
-                ids=[
-                    cid
-                    for cid, on in self.parent_view.selections.items()
-                    if on
-                ],
+                ids=[cid for cid, on in self.parent_view.selections.items() if on],
             )
         except SiegeWebError:
             self.parent_view.selections = prior
@@ -312,13 +304,9 @@ class EditPreferencesModal(discord.ui.Modal):
             return
 
         # 4. Refresh the ephemeral message with the converted-shape embed.
-        meta_keyed = _selections_to_meta_keyed(
-            self.parent_view.selections, self.pages
-        )
+        meta_keyed = _selections_to_meta_keyed(self.parent_view.selections, self.pages)
         embed = build_summary_embed(self.pages, meta_keyed)
-        await interaction.response.edit_message(
-            embed=embed, view=self.parent_view
-        )
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
 
 
 # ---------------------------------------------------------------------------
@@ -353,9 +341,7 @@ class _EditMetaButton(discord.ui.Button["EditPreferencesView"]):
         self._modal_page = page
         self._parent_view = parent_view
 
-    async def callback(
-        self, interaction: discord.Interaction
-    ) -> None:
+    async def callback(self, interaction: discord.Interaction) -> None:
         """Open the EditPreferencesModal for this sub-page.
 
         Args:
@@ -381,9 +367,7 @@ class _DismissButton(discord.ui.Button["EditPreferencesView"]):
             style=discord.ButtonStyle.danger,
         )
 
-    async def callback(
-        self, interaction: discord.Interaction
-    ) -> None:
+    async def callback(self, interaction: discord.Interaction) -> None:
         """Remove the view from the ephemeral message, preserving the embed.
 
         Args:
@@ -452,8 +436,7 @@ class EditPreferencesView(discord.ui.View):
         # Flat {id: bool} selections seeded from saved preferences.
         preferred: set[int] = set(preferences)
         self.selections: dict[int, bool] = {
-            int(cond["id"]): (int(cond["id"]) in preferred)
-            for cond in catalog
+            int(cond["id"]): (int(cond["id"]) in preferred) for cond in catalog
         }
 
         # One button per ModalPage sub-page.

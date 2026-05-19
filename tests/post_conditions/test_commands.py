@@ -394,9 +394,9 @@ async def test_set_command_opens_edit_preferences_view() -> None:
     assert isinstance(
         call_kwargs.get("embed"), discord.Embed
     ), "followup.send must include embed= from initial_embed()"
-    assert call_kwargs.get("view") is mock_view_instance, (
-        "followup.send view= must be the EditPreferencesView instance"
-    )
+    assert (
+        call_kwargs.get("view") is mock_view_instance
+    ), "followup.send view= must be the EditPreferencesView instance"
     mock_view_instance.initial_embed.assert_called_once()
 
 

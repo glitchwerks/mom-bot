@@ -130,9 +130,7 @@ def _make_siege_client(*, fail: bool = False) -> MagicMock:
     """
     client = MagicMock()
     if fail:
-        client.set_my_preferences = AsyncMock(
-            side_effect=SiegeWebError("simulated failure")
-        )
+        client.set_my_preferences = AsyncMock(side_effect=SiegeWebError("simulated failure"))
     else:
         client.set_my_preferences = AsyncMock(return_value=[])
     return client
@@ -314,9 +312,7 @@ async def test_on_submit_success_passes_merged_id_list() -> None:
     # After submit: id=1 checked from page_A, id=3 already True from page_B.
     selections = {1: False, 2: False, 3: True, 4: False}
     siege = _make_siege_client()
-    modal, _ = _build_modal(
-        page=_PAGE_A, selections=selections, siege_client=siege
-    )
+    modal, _ = _build_modal(page=_PAGE_A, selections=selections, siege_client=siege)
     _simulate_modal_submit(modal, checked_ids=[1])
 
     await modal.on_submit(_make_interaction())
@@ -508,7 +504,7 @@ async def test_on_submit_passes_string_discord_id_to_client() -> None:
     siege.set_my_preferences.assert_awaited_once()
     call_args = siege.set_my_preferences.call_args
     actual_discord_id = call_args.args[0]
-    assert isinstance(actual_discord_id, str), (
-        f"set_my_preferences expected str discord_id, got {type(actual_discord_id)}"
-    )
+    assert isinstance(
+        actual_discord_id, str
+    ), f"set_my_preferences expected str discord_id, got {type(actual_discord_id)}"
     assert actual_discord_id == expected_id
