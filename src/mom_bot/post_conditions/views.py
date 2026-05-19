@@ -116,7 +116,7 @@ class PostConditionsView(discord.ui.View):
 
         Args:
             catalog: All available PostConditionResponse dicts from
-                ``GET /api/reference/post-conditions``.
+                ``GET /api/post-conditions``.
             initial_prefs: The user's current PostConditionResponse dicts
                 from ``GET /api/members/me/preferences``.  Used to
                 pre-select options on first render.
