@@ -250,7 +250,7 @@ async def test_async_context_manager_closes_session_on_exit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# list_catalog — GET /api/reference/post-conditions
+# list_catalog — GET /api/post-conditions
 # ---------------------------------------------------------------------------
 
 
@@ -268,8 +268,13 @@ async def test_list_catalog_happy_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_catalog_does_not_send_auth_header() -> None:
-    """list_catalog must NOT send Authorization to the open catalog endpoint."""
+async def test_list_catalog_sends_auth_header() -> None:
+    """list_catalog must send Bearer Authorization to the catalog endpoint.
+
+    Regression for #134: the catalog endpoint requires the same Bearer
+    service token as the /me/* endpoints — it is NOT an open/unauthenticated
+    endpoint.
+    """
     client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
     resp_ctx = _make_response(200, _SAMPLE_CATALOG)
     session = _make_session(get_response=resp_ctx)
@@ -278,12 +283,10 @@ async def test_list_catalog_does_not_send_auth_header() -> None:
     await client.list_catalog()
 
     call_kwargs = session.get.call_args[1] if session.get.call_args else {}
-    # When called with headers=None, _call_with_retry omits the kwarg from
-    # the aiohttp call entirely (issue #130).  Accept both the old shape
-    # (headers={}) and the new shape (key absent) so this assertion is robust.
-    assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get(
-        "headers", {}
-    ), "Catalog endpoint must not receive Authorization header"
+    headers = call_kwargs.get("headers", {})
+    assert (
+        headers.get("Authorization") == f"Bearer {_TOKEN}"
+    ), "Catalog endpoint must receive Authorization: Bearer <token> header"
 
 
 @pytest.mark.asyncio
@@ -299,6 +302,32 @@ async def test_list_catalog_with_stronghold_level_passes_query_param() -> None:
     call_kwargs = session.get.call_args[1] if session.get.call_args else {}
     params = call_kwargs.get("params", {})
     assert params.get("stronghold_level") == 2
+
+
+@pytest.mark.asyncio
+async def test_list_catalog_uses_correct_url_path_without_reference_segment() -> None:
+    """Regression for #134 — catalog endpoint is /api/post-conditions.
+
+    mom-bot was calling /api/reference/post-conditions, which returns 404
+    on siege-web.  The live route has no /reference/ segment.
+    """
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_CATALOG)
+    session = _make_session(get_response=resp_ctx)
+    _inject_session(client, session)
+
+    await client.list_catalog()
+
+    call_args = session.get.call_args
+    assert call_args is not None
+    # Positional arg [0][0] is the URL passed to session.get().
+    url_called: str = call_args[0][0]
+    assert (
+        "/reference/" not in url_called
+    ), f"URL must not contain '/reference/' segment; got: {url_called!r}"
+    assert (
+        "/api/post-conditions" in url_called
+    ), f"URL must contain '/api/post-conditions'; got: {url_called!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -815,14 +844,21 @@ async def test_call_with_retry_succeeds_on_third_attempt() -> None:
 
 @pytest.mark.asyncio
 async def test_call_with_retry_omits_headers_when_none() -> None:
-    """When called with headers=None, aiohttp kwargs must not contain 'headers'."""
+    """When called with headers=None, aiohttp kwargs must not contain 'headers'.
+
+    This tests the _call_with_retry contract directly (issue #130): passing
+    ``headers=None`` must omit the key entirely from the aiohttp call, not
+    forward ``{"headers": None}`` to the wire layer.
+    """
     client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
     resp_ctx = _make_response(200, _SAMPLE_CATALOG)
     session = _make_session(get_response=resp_ctx)
     _inject_session(client, session)
 
-    # list_catalog calls _call_with_retry without auth headers
-    await client.list_catalog()
+    # Call _call_with_retry directly with headers=None to test the D10 contract
+    # independently of any public method that may now supply its own headers.
+    url = f"{_BASE_URL}/some/endpoint"
+    await client._call_with_retry("get", url, headers=None)
 
     call_kwargs = session.get.call_args[1] if session.get.call_args else {}
     assert "headers" not in call_kwargs, (

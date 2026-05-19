@@ -1,10 +1,10 @@
 """siege-web HTTP client for post-condition preference endpoints.
 
 Provides :class:`SiegeWebClient`, an ``aiohttp``-based wrapper around the
-two per-member preference endpoints on siege-web, plus the open catalog
-reference endpoint.  Authentication uses a shared ``BOT_SERVICE_TOKEN``
-passed as a Bearer header alongside a per-request ``X-Acting-Discord-Id``
-header that tells siege-web which member to operate on.
+catalog and per-member preference endpoints on siege-web.  Authentication
+uses a shared ``BOT_SERVICE_TOKEN`` passed as a Bearer header; the
+per-member endpoints additionally require an ``X-Acting-Discord-Id`` header
+that tells siege-web which member to operate on.
 
 Security contract
 -----------------
@@ -153,9 +153,9 @@ class SiegeWebClient:
 
     Wraps three endpoints:
 
-    - ``GET /api/reference/post-conditions`` — open catalog (no auth).
-    - ``GET /api/members/me/preferences``    — read a member's preferences.
-    - ``PUT /api/members/me/preferences``    — replace a member's preferences.
+    - ``GET /api/post-conditions``        — catalog (Bearer auth required).
+    - ``GET /api/members/me/preferences`` — read a member's preferences.
+    - ``PUT /api/members/me/preferences`` — replace a member's preferences.
 
     A single :class:`aiohttp.ClientSession` is created lazily on first use
     and reused across all subsequent calls.  Call :meth:`close` when the
@@ -308,7 +308,7 @@ class SiegeWebClient:
             method: HTTP verb, one of ``"get"`` or ``"put"``.
             url: Full request URL including scheme and path.
             headers: HTTP headers to include in the request, or ``None``
-                for unauthenticated calls (e.g. the catalog endpoint).
+                to omit the header block entirely from the aiohttp call.
             json: Optional request body as a dict (serialised to JSON).
             params: Optional URL query parameters forwarded to aiohttp.
 
@@ -376,7 +376,7 @@ class SiegeWebClient:
     ) -> list[dict[str, Any]]:
         """Fetch the post-condition catalog, returning a cached copy when fresh.
 
-        Calls ``GET /api/reference/post-conditions`` without authentication.
+        Calls ``GET /api/post-conditions`` with Bearer authentication.
         An optional ``stronghold_level`` query parameter filters the results.
         Results are cached per ``stronghold_level`` key for
         :data:`_CATALOG_CACHE_TTL` seconds (10 minutes).  A single
@@ -402,12 +402,11 @@ class SiegeWebClient:
             A list of PostConditionResponse dicts.
 
         Raises:
-            SiegeWebAuthError: On 401 (should not occur for this open
-                endpoint).
+            SiegeWebAuthError: On 401 (misconfigured bot service token).
             SiegeWebNotFoundError: On 404.
             SiegeWebValidationError: On 422.
         """
-        url = f"{self.base_url}/api/reference/post-conditions"
+        url = f"{self.base_url}/api/post-conditions"
         params: dict[str, Any] | None = (
             {"stronghold_level": stronghold_level} if stronghold_level is not None else None
         )
@@ -443,7 +442,12 @@ class SiegeWebClient:
                 "siege-web catalog cache miss " "(stronghold_level=%s); fetching.",
                 stronghold_level,
             )
-            result = await self._call_with_retry("get", url, headers=None, params=params)
+            result = await self._call_with_retry(
+                "get",
+                url,
+                headers={"Authorization": f"Bearer {self._token}"},
+                params=params,
+            )
             self._catalog_cache[stronghold_level] = (time.monotonic(), result)
             return result
 
