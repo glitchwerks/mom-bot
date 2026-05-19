@@ -1,32 +1,9 @@
-"""Paginated Discord UI view for post-condition preference selection.
+"""Discord UI views for post-condition preference selection.
 
-Provides :class:`PostConditionsView`, a ``discord.ui.View`` subclass that
-renders a 3-page multi-select interface — one page per non-empty meta-category
-defined in :data:`~mom_bot.post_conditions.grouping.META_GROUPS`.
-
-Page layout (per page)::
-
-    Page X of N — <Meta Label>         Selected: <total>
-
-    [▼ Pick preferences (<Meta Label>) ──────────────── ]
-       ☑ Only HP Champions can be used.       [role]
-       ☐ Only DEF Champions can be used.      [role]
-       ...
-
-    [◀ Prev]  [Next ▶]               [Commit]  [Cancel]
-
-    ┌──────────────────────────────────────────────┐
-    │ Selected preferences                         │
-    │ **Faction & League**                         │
-    │ ⚔️ Only Barbarian Champions.                 │
-    │ **Role, Affinity, Rarity**                   │
-    │ 🛡️ Only HP Champions.                        │
-    └──────────────────────────────────────────────┘
-
-Selections are accumulated in ``self.selections`` — a
-``dict[meta_label, set[condition_id]]`` — across page transitions so that
-navigating forward and back preserves all choices.  On Commit the dict is
-flattened into a single list and submitted via a single PUT call.
+Provides :class:`EditPreferencesView` — a persistent ephemeral-message view
+with one "Edit …" button per :class:`~.modal_layout.ModalPage` sub-page.
+Each button opens an :class:`EditPreferencesModal` containing a
+:class:`discord.ui.CheckboxGroup` for that sub-page's conditions.
 
 The :func:`build_summary_embed` helper is exported for unit-testing in
 isolation; callers outside this module should not need it directly.
@@ -35,14 +12,25 @@ isolation; callers outside this module should not need it directly.
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from typing import Any
 
 import discord
 import discord.ui
+from discord import CheckboxGroupOption
 
+from mom_bot.post_conditions.client import SiegeWebError
 from mom_bot.post_conditions.grouping import group_by_meta
+from mom_bot.post_conditions.modal_layout import ModalPage, split_meta_for_modals
 
-__all__ = ["PostConditionsView", "build_summary_embed"]
+__all__ = [
+    "build_summary_embed",
+    "EditPreferencesModal",
+    "EditPreferencesView",
+]
+
+# Discord modal title character limit.
+# Source: .venv/Lib/site-packages/discord/ui/modal.py docstring (L88).
+_MODAL_TITLE_LIMIT = 45
 
 _logger = logging.getLogger(__name__)
 
@@ -62,6 +50,48 @@ _EMBED_MAX_CHARS = 4096
 
 # Truncation suffix template — leave enough headroom for the suffix itself.
 _TRUNCATION_SUFFIX = "… and {n} more"
+
+# Discord caps a View's component count at 25; see discord.ui.View docs.
+_DISCORD_VIEW_COMPONENT_LIMIT = 25
+
+
+def _selections_to_meta_keyed(
+    selections: dict[int, bool],
+    pages: list[tuple[str, list[dict[str, Any]]]],
+) -> dict[str, set[int]]:
+    """Convert flat {id: bool} to {meta_label: {id, ...}} for build_summary_embed.
+
+    This adapter bridges two representations: EditPreferencesView's flat
+    boolean dict (convenient for modal updates) and build_summary_embed's
+    grouped-by-meta-label dict (convenient for embed rendering).
+
+    Walks ``pages`` (the existing ``group_by_meta(...)`` output) and, for
+    each ``(label, conditions)`` pair, collects the IDs that are truthy in
+    ``selections`` into a set keyed by ``label``.  Labels whose collected
+    set would be empty are omitted from the result entirely.
+
+    Args:
+        selections: A flat mapping from condition ID (``int``) to a boolean
+            indicating whether that condition is selected.
+        pages: The ``group_by_meta``-produced list of
+            ``(meta_label, [condition_dict, ...])`` pairs.  Determines
+            iteration order and which IDs belong to which label.
+
+    Returns:
+        A dict mapping each meta-label that has at least one selected
+        condition to the set of selected condition IDs for that label.
+        Returns ``{}`` when no IDs are selected or ``selections`` is empty.
+    """
+    result: dict[str, set[int]] = {}
+    for label, conditions in pages:
+        selected: set[int] = set()
+        for cond in conditions:
+            cid = int(cond["id"])
+            if selections.get(cid, False):
+                selected.add(cid)
+        if selected:
+            result[label] = selected
+    return result
 
 
 def build_summary_embed(
@@ -160,310 +190,291 @@ def build_summary_embed(
     return embed
 
 
-def _build_select(
-    meta_label: str,
-    conditions: list[dict[str, Any]],
-    selected_ids: set[int],
-) -> discord.ui.Select[Any]:
-    """Build a discord.ui.Select for a single meta-group page.
+class EditPreferencesModal(discord.ui.Modal):
+    """Modal containing one CheckboxGroup for a single ModalPage sub-page.
 
-    Args:
-        meta_label: The meta-category label (e.g. ``"Faction & League"``).
-        conditions: The PostConditionResponse dicts for this page.
-        selected_ids: IDs already selected by the user for this meta-group.
+    Displayed when the user clicks an "Edit ..." button in the
+    :class:`EditPreferencesView` ephemeral message.  On submit, updates the
+    parent view's flat ``selections`` dict for only the IDs in this sub-page,
+    pushes the full merged preference set to siege-web, then refreshes the
+    ephemeral with a re-rendered summary embed.
 
-    Returns:
-        A configured :class:`discord.ui.Select` ready to add to a view.
-    """
-    options = [
-        discord.SelectOption(
-            label=str(cond["description"])[:100],
-            value=str(cond["id"]),
-            description=f"[{cond.get('condition_type', '')}]",
-            emoji=_TYPE_EMOJI.get(str(cond.get("condition_type", "")), None),
-            default=(int(cond["id"]) in selected_ids),
-        )
-        for cond in conditions
-    ]
-    # Guard against an empty options list — a Select with 0 options is
-    # non-functional and discord.py raises if max_values < 1.  Callers
-    # (group_by_meta) already filter empty groups, but we defend here too.
-    if not options:
-        raise ValueError(
-            f"_build_select called with no options for meta_label={meta_label!r}. "
-            "Callers must filter empty groups before building a Select."
-        )
-    select: discord.ui.Select[Any] = discord.ui.Select(
-        placeholder=f"Pick preferences ({meta_label})",
-        min_values=0,
-        max_values=len(options),
-        options=options,
-    )
-    return select
-
-
-class PostConditionsView(discord.ui.View):
-    """Three-page paginated view for selecting post-condition preferences.
-
-    Each page renders one meta-category's conditions in a single
-    :class:`discord.ui.Select` with ``min_values=0`` and
-    ``max_values=len(group)``.  Navigation buttons allow moving between
-    pages; a Commit button submits the final set via PUT.
-
-    A :class:`discord.Embed` is rendered alongside the view on every
-    interaction (Select toggle, Prev, Next) to display the full text of
-    every currently-selected preference, grouped by meta-label.  This
-    works around Discord's truncation of collapsed Select chips.
+    If the PUT fails, the update is rolled back to the pre-submit state and an
+    ephemeral error message is sent.  No exception propagates out of
+    :meth:`on_submit`.
 
     Attributes:
-        current_page: Zero-based index of the currently displayed page.
-        page_count: Total number of non-empty meta-group pages.
-        selections: Accumulated selections keyed by meta label.
-            Values are sets of condition IDs (``int``).
+        group: The :class:`discord.ui.CheckboxGroup` added to this modal.
+        page: The :class:`~mom_bot.post_conditions.modal_layout.ModalPage`
+            this modal covers.
+        parent_view: The owning :class:`EditPreferencesView`.
+        pages: Full ``group_by_meta``-shaped pages list threaded through so
+            ``on_submit`` can call :func:`_selections_to_meta_keyed` and
+            :func:`build_summary_embed`.
+        discord_id: Discord snowflake for the acting user as a string, passed to
+            ``set_my_preferences``.
     """
 
     def __init__(
         self,
-        catalog: list[dict[str, Any]],
-        initial_prefs: list[dict[str, Any]],
-        discord_id: str,
+        *,
+        page: ModalPage,
+        parent_view: EditPreferencesView,
         siege_client: Any,
-        timeout: float = 300.0,
+        discord_id: str,
+        pages: list[tuple[str, list[dict[str, Any]]]],
     ) -> None:
-        """Initialise the view with catalog data and the user's current prefs.
+        """Initialise the modal for one ModalPage sub-page.
+
+        Builds a single :class:`discord.ui.CheckboxGroup` from
+        ``page.conditions``, pre-checking boxes for IDs that are currently
+        ``True`` in ``parent_view.selections``.
+
+        Args:
+            page: The sub-page of conditions this modal covers.  Must have
+                at most 10 entries (enforced by :class:`discord.ui.CheckboxGroup`).
+            parent_view: The :class:`EditPreferencesView` that owns this
+                modal.  Must expose a ``selections: dict[int, bool]``
+                attribute.
+            siege_client: A
+                :class:`~mom_bot.post_conditions.client.SiegeWebClient`
+                instance used for the PUT call on submit.
+            discord_id: The invoking user's Discord snowflake as a string.
+                Forwarded to ``siege_client.set_my_preferences``.
+            pages: The full ``group_by_meta``-shaped
+                ``list[tuple[str, list[dict[str, Any]]]]``.  Required so
+                ``on_submit`` can call :func:`_selections_to_meta_keyed` and
+                :func:`build_summary_embed` for the embed refresh.
+        """
+        title = page.label[:_MODAL_TITLE_LIMIT]
+        super().__init__(title=title)
+
+        self.page = page
+        self.parent_view = parent_view
+        self._siege_client = siege_client
+        self.discord_id = discord_id
+        self.pages = pages
+
+        # Build CheckboxGroup options from the sub-page conditions.
+        options = [
+            CheckboxGroupOption(
+                label=str(cond["description"]),
+                value=str(cond["id"]),
+                default=bool(parent_view.selections.get(int(cond["id"]), False)),
+            )
+            for cond in page.conditions
+        ]
+
+        self.group: discord.ui.CheckboxGroup[Any] = discord.ui.CheckboxGroup(
+            options=options,
+            min_values=0,
+            max_values=len(options),
+            required=False,
+        )
+        self.add_item(self.group)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Handle modal submission: update selections, PUT to siege-web, refresh embed.
+
+        Steps:
+            1. Snapshot current selections for rollback on PUT failure.
+            2. Update flat selections for this sub-page's IDs only.
+            3. Push the full preference set to siege-web via
+               ``set_my_preferences``.  On :class:`~.client.SiegeWebError`,
+               roll back selections and send an ephemeral error; then return.
+            4. Re-render the ephemeral summary embed via
+               :func:`build_summary_embed` and call
+               ``interaction.response.edit_message``.
+
+        Args:
+            interaction: The Discord interaction for this modal submission.
+        """
+        # 1. Snapshot for rollback on PUT failure.
+        prior = dict(self.parent_view.selections)
+
+        # 2. Update flat selections for this sub-page only.
+        submitted_ids = {int(v) for v in self.group.values}
+        sub_page_ids = {int(c["id"]) for c in self.page.conditions}
+        for cid in sub_page_ids:
+            self.parent_view.selections[cid] = cid in submitted_ids
+
+        # 3. Push the full preference set to siege-web.
+        try:
+            await self._siege_client.set_my_preferences(
+                self.discord_id,
+                ids=[cid for cid, on in self.parent_view.selections.items() if on],
+            )
+        except SiegeWebError as exc:
+            _logger.error(
+                "Failed to save preferences for discord_id=%s: %s",
+                self.discord_id,
+                exc,
+            )
+            self.parent_view.selections = prior
+            await interaction.response.send_message(
+                "Could not save preferences — please try again.",
+                ephemeral=True,
+            )
+            return
+
+        # 4. Refresh the ephemeral message with the converted-shape embed.
+        meta_keyed = _selections_to_meta_keyed(self.parent_view.selections, self.pages)
+        embed = build_summary_embed(self.pages, meta_keyed)
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView internal button helpers
+# ---------------------------------------------------------------------------
+
+
+class _EditMetaButton(discord.ui.Button["EditPreferencesView"]):
+    """Button that opens an EditPreferencesModal for one ModalPage sub-page.
+
+    Attributes:
+        _modal_page: The :class:`ModalPage` this button covers.
+        _parent_view: The :class:`EditPreferencesView` that owns this button.
+    """
+
+    def __init__(
+        self,
+        *,
+        page: ModalPage,
+        parent_view: EditPreferencesView,
+    ) -> None:
+        """Initialise the button for one ModalPage.
+
+        Args:
+            page: The sub-page of conditions this button opens a modal for.
+            parent_view: The owning :class:`EditPreferencesView`.
+        """
+        super().__init__(
+            label=f"Edit {page.label}",
+            style=discord.ButtonStyle.primary,
+        )
+        self._modal_page = page
+        self._parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Open the EditPreferencesModal for this sub-page.
+
+        Args:
+            interaction: The Discord interaction that triggered the button.
+        """
+        modal = EditPreferencesModal(
+            page=self._modal_page,
+            parent_view=self._parent_view,
+            siege_client=self._parent_view._siege_client,
+            discord_id=self._parent_view._discord_id,
+            pages=self._parent_view._pages,
+        )
+        await interaction.response.send_modal(modal)
+
+
+class _DismissButton(discord.ui.Button["EditPreferencesView"]):
+    """Button that strips buttons from the ephemeral message (keeps embed)."""
+
+    def __init__(self) -> None:
+        """Initialise the Dismiss button."""
+        super().__init__(
+            label="Dismiss",
+            style=discord.ButtonStyle.danger,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Remove the view from the ephemeral message, preserving the embed.
+
+        Args:
+            interaction: The Discord interaction that triggered the button.
+        """
+        await interaction.response.edit_message(view=None)
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView
+# ---------------------------------------------------------------------------
+
+
+class EditPreferencesView(discord.ui.View):
+    """Persistent ephemeral-message view with Edit buttons + Dismiss.
+
+    Holds the user's flat ``selections`` dict and exposes one
+    :class:`_EditMetaButton` per :class:`ModalPage` produced by
+    :func:`~.modal_layout.split_meta_for_modals`, plus a single
+    :class:`_DismissButton`.
+
+    Each Edit button opens an :class:`EditPreferencesModal` for its
+    sub-page.  On modal submit, ``selections`` is updated in place and
+    the ephemeral is refreshed via the parent view reference threaded
+    through the modal.
+
+    Attributes:
+        selections: Flat mapping from catalog condition id (``int``) to
+            ``bool`` — ``True`` if the condition is currently selected,
+            ``False`` otherwise.  Updated in-place by each modal submit.
+    """
+
+    def __init__(
+        self,
+        *,
+        catalog: list[dict[str, Any]],
+        preferences: list[int],
+        siege_client: Any,
+        discord_id: str,
+        timeout: float | None = 300.0,
+    ) -> None:
+        """Initialise the view from catalog data and saved preferences.
 
         Args:
             catalog: All available PostConditionResponse dicts from
                 ``GET /api/post-conditions``.
-            initial_prefs: The user's current PostConditionResponse dicts
-                from ``GET /api/members/me/preferences``.  Used to
-                pre-select options on first render.
-            discord_id: The invoking user's Discord snowflake as a string.
-                Passed to ``siege_client.set_my_preferences`` on Commit.
+            preferences: The user's currently-saved condition IDs from
+                ``GET /api/members/me/preferences``.  Used to seed
+                ``selections``.  IDs not present in ``catalog`` are
+                silently ignored.
             siege_client: A
                 :class:`~mom_bot.post_conditions.client.SiegeWebClient`
-                instance used for the Commit PUT call.
+                instance threaded to each modal for the PUT call.
+            discord_id: The invoking user's Discord snowflake as a string.
+                Forwarded to ``siege_client.set_my_preferences`` by each
+                modal on submit.
             timeout: View timeout in seconds.  Defaults to 300 (5 minutes).
         """
         super().__init__(timeout=timeout)
-        self._discord_id = discord_id
+
         self._siege_client = siege_client
+        self._discord_id = discord_id
 
-        # Build pages: list of (meta_label, [condition_dict, ...])
+        # Full group_by_meta pages for embed rendering inside modals.
         self._pages = group_by_meta(catalog)
-        self.page_count = len(self._pages)
-        self.current_page = 0
 
-        # Pre-populate selections from initial prefs.
-        initial_ids: set[int] = {int(p["id"]) for p in initial_prefs}
-        self.selections: dict[str, set[int]] = {label: set() for label, _ in self._pages}
-        for label, conditions in self._pages:
-            for cond in conditions:
-                cid = int(cond["id"])
-                if cid in initial_ids:
-                    self.selections[label].add(cid)
+        # Flat {id: bool} selections seeded from saved preferences.
+        preferred: set[int] = set(preferences)
+        self.selections: dict[int, bool] = {}
+        for cond in catalog:
+            cid = int(cond["id"])
+            self.selections[cid] = cid in preferred
 
-        # Build initial UI items.
-        self._rebuild_items()
+        # One button per ModalPage sub-page.
+        self._modal_pages = split_meta_for_modals(catalog)
+        for page in self._modal_pages:
+            self.add_item(_EditMetaButton(page=page, parent_view=self))
 
-    # ------------------------------------------------------------------
-    # Header
-    # ------------------------------------------------------------------
+        # Dismiss button.
+        self.add_item(_DismissButton())
 
-    def build_header(self) -> str:
-        """Build the embed-style header string for the current page.
+    def initial_embed(self) -> discord.Embed:
+        """Build a selection-summary embed from the view's current state.
 
-        Returns:
-            A string of the form
-            ``"Page X of N — <Meta Label>\\nSelected: <total>"``.
-        """
-        page_label = self._pages[self.current_page][0] if self._pages else "—"
-        total_selected = sum(len(s) for s in self.selections.values())
-        return (
-            f"Page {self.current_page + 1} of {self.page_count}"
-            f" — {page_label}\nSelected: {total_selected}"
-        )
-
-    def build_embed(self) -> discord.Embed:
-        """Build the live selection-summary embed for the current state.
-
-        Delegates to :func:`build_summary_embed` with the view's current
-        ``_pages`` catalog and ``selections`` state.
+        Converts the flat ``selections`` dict into the meta-keyed shape
+        expected by :func:`build_summary_embed` and returns the resulting
+        :class:`discord.Embed`.  Intended to be called once at message-send
+        time so the initial ephemeral already reflects pre-existing
+        preferences.
 
         Returns:
-            A :class:`discord.Embed` listing every selected preference,
-            grouped by meta-label.
+            A :class:`discord.Embed` ready to pass as ``embed=`` in the
+            ``interaction.followup.send`` call that opens this view.
         """
-        return build_summary_embed(self._pages, self.selections)
-
-    # ------------------------------------------------------------------
-    # Navigation
-    # ------------------------------------------------------------------
-
-    async def go_next(self, interaction: discord.Interaction) -> None:
-        """Advance to the next page, preserving current page selections.
-
-        Args:
-            interaction: The Discord interaction that triggered the button.
-        """
-        if self.current_page < self.page_count - 1:
-            self.current_page += 1
-        self._rebuild_items()
-        await interaction.response.edit_message(
-            content=self.build_header(),
-            embed=self.build_embed(),
-            view=self,
-        )
-
-    async def go_prev(self, interaction: discord.Interaction) -> None:
-        """Return to the previous page, preserving current page selections.
-
-        Args:
-            interaction: The Discord interaction that triggered the button.
-        """
-        if self.current_page > 0:
-            self.current_page -= 1
-        self._rebuild_items()
-        await interaction.response.edit_message(
-            content=self.build_header(),
-            embed=self.build_embed(),
-            view=self,
-        )
-
-    # ------------------------------------------------------------------
-    # Commit / Cancel
-    # ------------------------------------------------------------------
-
-    async def commit(self, interaction: discord.Interaction) -> None:
-        """Flatten all selections and submit a single PUT to siege-web.
-
-        Collects all selected condition IDs across all pages, then calls
-        :meth:`~mom_bot.post_conditions.client.SiegeWebClient.\
-set_my_preferences`.
-
-        Args:
-            interaction: The Discord interaction that triggered the button.
-        """
-        all_ids: list[int] = sorted({cid for ids in self.selections.values() for cid in ids})
-        try:
-            await self._siege_client.set_my_preferences(discord_id=self._discord_id, ids=all_ids)
-            n = len(all_ids)
-            await interaction.response.send_message(
-                f"Saved — {n} preference{'s' if n != 1 else ''} set.",
-                ephemeral=True,
-            )
-        except Exception:
-            _logger.exception(
-                "Failed to save post-condition preferences for discord_id=%s",
-                self._discord_id,
-            )
-            await interaction.response.send_message(
-                "Something went wrong saving your preferences. " "Please try again in a moment.",
-                ephemeral=True,
-            )
-        self.stop()
-
-    async def cancel(self, interaction: discord.Interaction) -> None:
-        """Dismiss the view without saving.
-
-        Args:
-            interaction: The Discord interaction that triggered the button.
-        """
-        await interaction.response.send_message(
-            "Cancelled — no changes were saved.", ephemeral=True
-        )
-        self.stop()
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _rebuild_items(self) -> None:
-        """Clear all UI items and rebuild them for the current page.
-
-        Called during construction and after every page navigation to
-        recreate the Select and navigation buttons.
-        """
-        self.clear_items()
-        if not self._pages:
-            return
-
-        meta_label, conditions = self._pages[self.current_page]
-        selected_ids = self.selections.get(meta_label, set())
-
-        # --- Select ---
-        select = _build_select(meta_label, conditions, selected_ids)
-
-        # Capture label in closure for the callback.
-        _label = meta_label
-
-        async def _on_select(
-            sel_interaction: discord.Interaction,
-        ) -> None:
-            # interaction.data is typed as a union; cast to dict[str, Any]
-            # so mypy accepts the .get() call without a union-attr error.
-            data = cast(dict[str, Any], sel_interaction.data or {})
-            values: list[str] = list(data.get("values", []))
-            self.selections[_label] = {int(v) for v in values}
-            await sel_interaction.response.edit_message(
-                content=self.build_header(),
-                embed=self.build_embed(),
-                view=self,
-            )
-
-        select.callback = _on_select  # type: ignore[assignment]
-        self.add_item(select)
-
-        # --- Prev button ---
-        prev_btn: discord.ui.Button[Any] = discord.ui.Button(
-            label="◄ Prev",
-            style=discord.ButtonStyle.secondary,
-            disabled=(self.current_page == 0),
-            row=1,
-        )
-
-        async def _prev(btn_interaction: discord.Interaction) -> None:
-            await self.go_prev(btn_interaction)
-
-        prev_btn.callback = _prev  # type: ignore[assignment]
-        self.add_item(prev_btn)
-
-        # --- Next button ---
-        next_btn: discord.ui.Button[Any] = discord.ui.Button(
-            label="Next ►",
-            style=discord.ButtonStyle.secondary,
-            disabled=(self.current_page >= self.page_count - 1),
-            row=1,
-        )
-
-        async def _next(btn_interaction: discord.Interaction) -> None:
-            await self.go_next(btn_interaction)
-
-        next_btn.callback = _next  # type: ignore[assignment]
-        self.add_item(next_btn)
-
-        # --- Commit button ---
-        commit_btn: discord.ui.Button[Any] = discord.ui.Button(
-            label="Commit",
-            style=discord.ButtonStyle.success,
-            row=1,
-        )
-
-        async def _commit(btn_interaction: discord.Interaction) -> None:
-            await self.commit(btn_interaction)
-
-        commit_btn.callback = _commit  # type: ignore[assignment]
-        self.add_item(commit_btn)
-
-        # --- Cancel button ---
-        cancel_btn: discord.ui.Button[Any] = discord.ui.Button(
-            label="Cancel",
-            style=discord.ButtonStyle.danger,
-            row=1,
-        )
-
-        async def _cancel(btn_interaction: discord.Interaction) -> None:
-            await self.cancel(btn_interaction)
-
-        cancel_btn.callback = _cancel  # type: ignore[assignment]
-        self.add_item(cancel_btn)
+        meta_keyed = _selections_to_meta_keyed(self.selections, self._pages)
+        return build_summary_embed(self._pages, meta_keyed)

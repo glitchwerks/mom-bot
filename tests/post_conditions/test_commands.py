@@ -22,6 +22,7 @@ from mom_bot.post_conditions.commands import (
     post_conditions_set,
     register,
 )
+from mom_bot.post_conditions.views import EditPreferencesView
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -277,11 +278,12 @@ async def test_set_command_defers_before_fetching() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.PostConditionsView",
+        "mom_bot.post_conditions.commands.EditPreferencesView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
-        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        fake_embed = MagicMock(spec=discord.Embed)
+        mock_view_instance.initial_embed = MagicMock(return_value=fake_embed)
         MockView.return_value = mock_view_instance
 
         await post_conditions_set(interaction, siege_client=siege_client)
@@ -296,11 +298,12 @@ async def test_set_command_replies_via_followup() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.PostConditionsView",
+        "mom_bot.post_conditions.commands.EditPreferencesView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
-        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        fake_embed = MagicMock(spec=discord.Embed)
+        mock_view_instance.initial_embed = MagicMock(return_value=fake_embed)
         MockView.return_value = mock_view_instance
 
         await post_conditions_set(interaction, siege_client=siege_client)
@@ -316,11 +319,12 @@ async def test_set_command_uses_invoking_user_id() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.PostConditionsView",
+        "mom_bot.post_conditions.commands.EditPreferencesView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
-        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        fake_embed = MagicMock(spec=discord.Embed)
+        mock_view_instance.initial_embed = MagicMock(return_value=fake_embed)
         MockView.return_value = mock_view_instance
 
         await post_conditions_set(interaction, siege_client=siege_client)
@@ -336,11 +340,12 @@ async def test_set_command_sends_ephemeral_reply() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.PostConditionsView",
+        "mom_bot.post_conditions.commands.EditPreferencesView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
-        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        fake_embed = MagicMock(spec=discord.Embed)
+        mock_view_instance.initial_embed = MagicMock(return_value=fake_embed)
         MockView.return_value = mock_view_instance
 
         await post_conditions_set(interaction, siege_client=siege_client)
@@ -366,24 +371,22 @@ async def test_set_command_404_shows_link_account_guidance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_command_initial_render_includes_summary_embed() -> None:
-    """/post-conditions-set includes embed=<discord.Embed> on the initial render.
+async def test_set_command_opens_edit_preferences_view() -> None:
+    """/post-conditions-set opens an EditPreferencesView (not PostConditionsView).
 
-    The embed must be passed to ``followup.send`` at open time so pre-existing
-    preferences are visible before the user interacts with any Select menu.
+    The view= kwarg on followup.send must be an EditPreferencesView instance
+    and the embed= kwarg must be a discord.Embed from initial_embed().
     """
     interaction = _make_interaction()
-    # Client returns _CATALOG (two items) and _PREFS (item id=5 pre-selected).
     siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
 
     with patch(
-        "mom_bot.post_conditions.commands.PostConditionsView",
+        "mom_bot.post_conditions.commands.EditPreferencesView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
-        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
         fake_embed = MagicMock(spec=discord.Embed)
-        mock_view_instance.build_embed = MagicMock(return_value=fake_embed)
+        mock_view_instance.initial_embed = MagicMock(return_value=fake_embed)
         MockView.return_value = mock_view_instance
 
         await post_conditions_set(interaction, siege_client=siege_client)
@@ -391,17 +394,19 @@ async def test_set_command_initial_render_includes_summary_embed() -> None:
     call_kwargs = interaction.followup.send.call_args[1]
     assert isinstance(
         call_kwargs.get("embed"), discord.Embed
-    ), "followup.send must include embed= on first render"
-    assert call_kwargs.get("view") is mock_view_instance
-    mock_view_instance.build_embed.assert_called_once()
+    ), "followup.send must include embed= from initial_embed()"
+    assert (
+        call_kwargs.get("view") is mock_view_instance
+    ), "followup.send view= must be the EditPreferencesView instance"
+    mock_view_instance.initial_embed.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_set_command_initial_embed_reflects_preexisting_selections() -> None:
     """/post-conditions-set embed description is not 'None selected yet.' when prefs exist.
 
-    Exercises the real PostConditionsView (no mock) to confirm the embed body
-    built from ``initial_prefs`` reflects pre-existing selections.
+    Exercises the real EditPreferencesView (no mock) to confirm the embed body
+    built from existing preferences reflects pre-existing selections.
     """
     interaction = _make_interaction()
     siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
@@ -412,7 +417,7 @@ async def test_set_command_initial_embed_reflects_preexisting_selections() -> No
     embed: discord.Embed = call_kwargs.get("embed")
     assert embed is not None, "embed must be present on initial render"
     assert isinstance(embed, discord.Embed)
-    # With _PREFS containing id=5, the description must NOT be the empty-state sentinel.
+    # _PREFS contains id=5; the description must NOT be the empty-state sentinel.
     assert (
         embed.description != "_None selected yet._"
     ), "embed should show pre-existing selections, not the empty-state text"
@@ -433,3 +438,19 @@ def test_register_attaches_commands_to_tree() -> None:
 
     # Should have registered 3 commands.
     assert tree.command.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_set_command_attaches_real_edit_preferences_view() -> None:
+    """Integration: real EditPreferencesView is constructed and attached to followup.send.
+
+    Exercises the command end-to-end without mocking EditPreferencesView so
+    that the isinstance check is against the concrete class, not a mock.
+    """
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
+
+    await post_conditions_set(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
+    assert isinstance(call_kwargs["view"], EditPreferencesView)
