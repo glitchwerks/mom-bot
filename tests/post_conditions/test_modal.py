@@ -162,7 +162,7 @@ def _simulate_modal_submit(
 def _build_modal(
     page: ModalPage = _PAGE_A,
     selections: dict[int, bool] | None = None,
-    discord_id: int = 42,
+    discord_id: str = "42",
     siege_client: Any | None = None,
     pages: list[tuple[str, list[dict[str, Any]]]] | None = None,
     fail: bool = False,
@@ -173,7 +173,7 @@ def _build_modal(
         page: The :class:`~mom_bot.post_conditions.modal_layout.ModalPage`
             to pass to the modal.
         selections: Initial selections dict for the parent view.
-        discord_id: Discord snowflake for the acting user.
+        discord_id: Discord snowflake for the acting user (string).
         siege_client: Optional pre-built siege client mock.
         pages: Full pages list for embed rendering.
             Defaults to :data:`_PAGES`.
@@ -454,7 +454,7 @@ async def test_sequential_modal_submits_accumulate_selections() -> None:
         page=_PAGE_A,
         parent_view=parent,
         siege_client=siege,
-        discord_id=42,
+        discord_id="42",
         pages=_PAGES,
     )
     _simulate_modal_submit(modal_a, checked_ids=[1])
@@ -468,7 +468,7 @@ async def test_sequential_modal_submits_accumulate_selections() -> None:
         page=_PAGE_B,
         parent_view=parent,
         siege_client=siege,
-        discord_id=42,
+        discord_id="42",
         pages=_PAGES,
     )
     _simulate_modal_submit(modal_b, checked_ids=[3])
@@ -479,3 +479,36 @@ async def test_sequential_modal_submits_accumulate_selections() -> None:
     _, kwargs = final_call
     sent_ids = set(kwargs["ids"])
     assert sent_ids == {1, 3}
+
+
+# ---------------------------------------------------------------------------
+# Regression: discord_id type guard
+# ---------------------------------------------------------------------------
+
+
+async def test_on_submit_passes_string_discord_id_to_client() -> None:
+    """set_my_preferences receives a str discord_id, not an int.
+
+    Regression guard for the bug where EditPreferencesModal accepted
+    ``discord_id: int`` but ``SiegeWebClient.set_my_preferences`` expects
+    ``discord_id: str``.  AsyncMock accepts any type, so only an explicit
+    isinstance check catches the mismatch.
+    """
+    expected_id = "99"
+    siege = _make_siege_client()
+    modal, _ = _build_modal(
+        selections={1: True, 2: False},
+        discord_id=expected_id,
+        siege_client=siege,
+    )
+    _simulate_modal_submit(modal, checked_ids=[1])
+
+    await modal.on_submit(_make_interaction())
+
+    siege.set_my_preferences.assert_awaited_once()
+    call_args = siege.set_my_preferences.call_args
+    actual_discord_id = call_args.args[0]
+    assert isinstance(actual_discord_id, str), (
+        f"set_my_preferences expected str discord_id, got {type(actual_discord_id)}"
+    )
+    assert actual_discord_id == expected_id

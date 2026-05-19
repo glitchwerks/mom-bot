@@ -534,7 +534,7 @@ class EditPreferencesModal(discord.ui.Modal):
         pages: Full ``group_by_meta``-shaped pages list threaded through so
             ``on_submit`` can call :func:`_selections_to_meta_keyed` and
             :func:`build_summary_embed`.
-        discord_id: Discord snowflake for the acting user, passed to
+        discord_id: Discord snowflake for the acting user as a string, passed to
             ``set_my_preferences``.
     """
 
@@ -544,7 +544,7 @@ class EditPreferencesModal(discord.ui.Modal):
         page: ModalPage,
         parent_view: Any,
         siege_client: Any,
-        discord_id: int,
+        discord_id: str,
         pages: list[tuple[str, list[dict[str, Any]]]],
     ) -> None:
         """Initialise the modal for one ModalPage sub-page.
@@ -563,7 +563,7 @@ class EditPreferencesModal(discord.ui.Modal):
             siege_client: A
                 :class:`~mom_bot.post_conditions.client.SiegeWebClient`
                 instance used for the PUT call on submit.
-            discord_id: The invoking user's Discord snowflake (numeric int).
+            discord_id: The invoking user's Discord snowflake as a string.
                 Forwarded to ``siege_client.set_my_preferences``.
             pages: The full ``group_by_meta``-shaped
                 ``list[tuple[str, list[dict[str, Any]]]]``.  Required so
