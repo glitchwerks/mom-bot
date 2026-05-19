@@ -64,6 +64,41 @@ _EMBED_MAX_CHARS = 4096
 _TRUNCATION_SUFFIX = "… and {n} more"
 
 
+def _selections_to_meta_keyed(
+    selections: dict[int, bool],
+    pages: list[tuple[str, list[dict[str, Any]]]],
+) -> dict[str, set[int]]:
+    """Convert flat {id: bool} to {meta_label: {id, ...}} for build_summary_embed.
+
+    Walks ``pages`` (the existing ``group_by_meta(...)`` output) and, for
+    each ``(label, conditions)`` pair, collects the IDs that are truthy in
+    ``selections`` into a set keyed by ``label``.  Labels whose collected
+    set would be empty are omitted from the result entirely.
+
+    Args:
+        selections: A flat mapping from condition ID (``int``) to a boolean
+            indicating whether that condition is selected.
+        pages: The ``group_by_meta``-produced list of
+            ``(meta_label, [condition_dict, ...])`` pairs.  Determines
+            iteration order and which IDs belong to which label.
+
+    Returns:
+        A dict mapping each meta-label that has at least one selected
+        condition to the set of selected condition IDs for that label.
+        Returns ``{}`` when no IDs are selected or ``selections`` is empty.
+    """
+    result: dict[str, set[int]] = {}
+    for label, conditions in pages:
+        selected: set[int] = {
+            int(cond["id"])
+            for cond in conditions
+            if selections.get(int(cond["id"]), False)
+        }
+        if selected:
+            result[label] = selected
+    return result
+
+
 def build_summary_embed(
     pages: list[tuple[str, list[dict[str, Any]]]],
     selections: dict[str, set[int]],
