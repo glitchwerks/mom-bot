@@ -44,6 +44,8 @@ from mom_bot import __version__
 from mom_bot.config import load_secret
 from mom_bot.db import build_session_factory as _build_session_factory
 from mom_bot.health import start_health_server
+from mom_bot.post_conditions.client import SiegeWebClient
+from mom_bot.post_conditions.commands import register as _register_post_conditions
 from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
 from mom_bot.roles.seed import seed_day_role_map
@@ -110,6 +112,9 @@ class MomBot(discord.Client):
             stored to prevent garbage collection.
         _health_runner: The aiohttp AppRunner for the /healthz server;
             stored so :meth:`close` can shut it down cleanly.
+        _siege_client: The :class:`~mom_bot.post_conditions.client.\
+SiegeWebClient` instance registered via :func:`make_client`; stored so
+            :meth:`close` can close its aiohttp session on shutdown.
     """
 
     def __init__(self, intents: discord.Intents) -> None:
@@ -124,6 +129,7 @@ class MomBot(discord.Client):
         self.guild: discord.Object | None = None
         self._reminder_task: asyncio.Task[None] | None = None
         self._health_runner: web.AppRunner | None = None
+        self._siege_client: SiegeWebClient | None = None
 
     async def setup_hook(self) -> None:
         """Sync slash commands and spawn the post-READY init task.
@@ -266,19 +272,31 @@ class MomBot(discord.Client):
             )
 
     async def close(self) -> None:
-        """Shut down the health server then close the gateway connection.
+        """Shut down ancillary resources then close the gateway connection.
 
-        Overrides :meth:`discord.Client.close` to ensure the aiohttp runner
-        started in :meth:`setup_hook` is cleaned up before the process exits.
-        Cleanup is best-effort: a failure here is logged but not re-raised so
-        the gateway close still proceeds.
+        Overrides :meth:`discord.Client.close` to ensure the aiohttp health
+        server runner and the siege-web HTTP client session are cleaned up
+        before the process exits.  All cleanup is best-effort: failures are
+        logged but not re-raised so the gateway close still proceeds.
         """
         if self._health_runner is not None:
             try:
                 await self._health_runner.cleanup()
                 _logger.info("Health server shut down cleanly")
             except Exception:
-                _logger.warning("Health server shutdown encountered an error", exc_info=True)
+                _logger.warning(
+                    "Health server shutdown encountered an error",
+                    exc_info=True,
+                )
+        if self._siege_client is not None:
+            try:
+                await self._siege_client.close()
+                _logger.info("SiegeWebClient session closed cleanly")
+            except Exception:
+                _logger.warning(
+                    "SiegeWebClient session close encountered an error",
+                    exc_info=True,
+                )
         await super().close()
 
 
@@ -313,14 +331,24 @@ def configure_logging() -> None:
     )
 
 
-def make_client() -> MomBot:
+def make_client(
+    siege_client: SiegeWebClient | None = None,
+) -> MomBot:
     """Construct the configured client without running it.
 
-    Registers the ``/ping`` command on the client's command tree.  The
-    client is not connected and :meth:`~MomBot.setup_hook` is not called
-    until :meth:`discord.Client.run` (or :meth:`~discord.Client.start`)
-    is invoked, which means this factory is safe to call in tests without
-    a network connection or Key Vault access.
+    Registers the ``/ping`` command and the three post-condition commands on
+    the client's command tree.  The client is not connected and
+    :meth:`~MomBot.setup_hook` is not called until
+    :meth:`discord.Client.run` (or :meth:`~discord.Client.start`) is
+    invoked.
+
+    Args:
+        siege_client: A pre-constructed :class:`~mom_bot.post_conditions.\
+client.SiegeWebClient` to use for the post-condition commands.  When
+            ``None`` (the default for production) the client is built
+            here by calling ``load_secret`` to resolve the siege-web URL
+            and bot token from Azure Key Vault.  Pass an explicit instance
+            in tests to avoid Key Vault round-trips.
 
     Returns:
         A fully-configured :class:`MomBot` instance ready to be started.
@@ -342,6 +370,18 @@ def make_client() -> MomBot:
             f"pong! version={__version__} uptime={uptime_seconds}s",
             ephemeral=True,
         )
+
+    # Register post-condition slash commands.  The SiegeWebClient is
+    # constructed once at boot so the token is resolved from Key Vault once
+    # and reused across all command invocations.
+    if siege_client is None:
+        siege_client = SiegeWebClient(
+            base_url=load_secret("siege-web-url"),
+            token=load_secret("siege-web-bot-token"),
+        )
+    # Store on the bot so MomBot.close() can close the aiohttp session.
+    client._siege_client = siege_client
+    _register_post_conditions(tree=client.tree, siege_client=siege_client)
 
     return client
 
