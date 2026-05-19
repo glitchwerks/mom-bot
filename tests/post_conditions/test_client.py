@@ -71,12 +71,15 @@ _SAMPLE_PREFS: list[dict[str, Any]] = [
 def _make_response(
     status: int,
     json_data: Any = None,
+    headers: dict[str, str] | None = None,
 ) -> MagicMock:
     """Return a mock aiohttp response async context manager.
 
     Args:
         status: HTTP status code the mock response should report.
         json_data: Value to return from ``await resp.json()``.
+        headers: Optional response headers dict (e.g. ``{"Retry-After":
+            "2"}``).  Defaults to an empty dict.
 
     Returns:
         A :class:`~unittest.mock.MagicMock` that acts as an ``async with``
@@ -85,6 +88,7 @@ def _make_response(
     resp = MagicMock()
     resp.status = status
     resp.json = AsyncMock(return_value=json_data)
+    resp.headers = headers or {}
 
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=resp)
@@ -274,9 +278,11 @@ async def test_list_catalog_does_not_send_auth_header() -> None:
     await client.list_catalog()
 
     call_kwargs = session.get.call_args[1] if session.get.call_args else {}
-    headers_sent = call_kwargs.get("headers", {})
-    assert (
-        "Authorization" not in headers_sent
+    # After D10, _call_with_retry omits the 'headers' key entirely when the
+    # caller passes headers=None.  Accept both the old shape (headers={}) and
+    # the new shape (key absent) so this assertion survives the transition.
+    assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get(
+        "headers", {}
     ), "Catalog endpoint must not receive Authorization header"
 
 
@@ -385,20 +391,19 @@ async def test_get_my_preferences_429_retries_once_and_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_my_preferences_429_twice_raises_rate_limit_error() -> None:
-    """get_my_preferences raises SiegeWebRateLimitError if 429 on retry too."""
+async def test_get_my_preferences_429_persistent_raises_rate_limit_error() -> None:
+    """get_my_preferences raises SiegeWebRateLimitError after 4 consecutive 429s."""
     client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
 
-    first_ctx = _make_response(429, None)
-    second_ctx = _make_response(429, None)
-
     session = _make_session()
-    session.get = MagicMock(side_effect=[first_ctx, second_ctx])
+    session.get = MagicMock(side_effect=[_make_response(429, None) for _ in range(4)])
     _inject_session(client, session)
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         with pytest.raises(SiegeWebRateLimitError):
             await client.get_my_preferences(discord_id=_DISCORD_ID)
+
+    assert mock_sleep.await_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -521,20 +526,223 @@ async def test_set_my_preferences_429_retries_once_and_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_my_preferences_429_twice_raises_rate_limit_error() -> None:
-    """set_my_preferences raises SiegeWebRateLimitError if 429 on retry too."""
+async def test_set_my_preferences_429_persistent_raises_rate_limit_error() -> None:
+    """set_my_preferences raises SiegeWebRateLimitError after 4 consecutive 429s."""
     client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
 
-    first_ctx = _make_response(429, None)
-    second_ctx = _make_response(429, None)
-
     session = _make_session()
-    session.put = MagicMock(side_effect=[first_ctx, second_ctx])
+    session.put = MagicMock(side_effect=[_make_response(429, None) for _ in range(4)])
     _inject_session(client, session)
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         with pytest.raises(SiegeWebRateLimitError):
             await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+
+    assert mock_sleep.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# list_catalog — catalog TTL cache
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_catalog_caches_response() -> None:
+    """Two rapid list_catalog() calls hit HTTP exactly once; both return equal data."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_CATALOG)
+    session = _make_session(get_response=resp_ctx)
+    _inject_session(client, session)
+
+    first = await client.list_catalog()
+    second = await client.list_catalog()
+
+    assert first == _SAMPLE_CATALOG
+    assert second == _SAMPLE_CATALOG
+    assert session.get.call_count == 1, "HTTP layer must be called only once when the cache is warm"
+
+
+@pytest.mark.asyncio
+async def test_list_catalog_cache_expires_after_ttl() -> None:
+    """list_catalog() refetches from HTTP after the TTL has elapsed."""
+    import time_machine  # noqa: PLC0415 — only available in dev deps
+
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_CATALOG)
+    session = _make_session(get_response=resp_ctx)
+    _inject_session(client, session)
+
+    await client.list_catalog()
+    assert session.get.call_count == 1
+
+    # Advance monotonic time past the TTL.
+    with time_machine.travel(0, tick=False):
+        # Re-inject session since time_machine may reset things; re-use same.
+        pass
+
+    # Manually expire the cache by backdating its timestamp.
+    from mom_bot.post_conditions.client import _CATALOG_CACHE_TTL  # noqa: PLC0415
+
+    old_ts, old_payload = client._catalog_cache[None]
+    client._catalog_cache[None] = (
+        old_ts - _CATALOG_CACHE_TTL - 1.0,
+        old_payload,
+    )
+
+    # Second call must go to HTTP again.
+    resp_ctx2 = _make_response(200, _SAMPLE_CATALOG)
+    session.get = MagicMock(return_value=resp_ctx2)
+
+    second = await client.list_catalog()
+
+    assert second == _SAMPLE_CATALOG
+    assert session.get.call_count == 1  # reset to 1 after re-assignment
+
+
+@pytest.mark.asyncio
+async def test_list_catalog_caches_per_stronghold_level() -> None:
+    """Cache keys are distinct for None, 5, and then None again (cache hit)."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+
+    resp_none = _make_response(200, _SAMPLE_CATALOG)
+    resp_five = _make_response(200, [])
+
+    session = _make_session()
+    session.get = MagicMock(side_effect=[resp_none, resp_five])
+    _inject_session(client, session)
+
+    await client.list_catalog()  # miss → key None
+    await client.list_catalog(stronghold_level=5)  # miss → key 5
+    await client.list_catalog()  # hit → key None (no HTTP)
+
+    assert (
+        session.get.call_count == 2
+    ), "HTTP must be called once per distinct cache key, not on cache hits"
+
+
+@pytest.mark.asyncio
+async def test_list_catalog_concurrent_requests_share_fetch() -> None:
+    """Two concurrent list_catalog() calls on a cold cache produce one HTTP request."""
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_CATALOG)
+    session = _make_session(get_response=resp_ctx)
+    _inject_session(client, session)
+
+    results = await _asyncio.gather(
+        client.list_catalog(),
+        client.list_catalog(),
+    )
+
+    assert results[0] == _SAMPLE_CATALOG
+    assert results[1] == _SAMPLE_CATALOG
+    assert (
+        session.get.call_count == 1
+    ), "Lock must prevent concurrent cold-cache misses from double-fetching"
+
+
+# ---------------------------------------------------------------------------
+# _call_with_retry — Retry-After / exponential backoff / helper contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_honors_retry_after_header() -> None:
+    """On 429 with Retry-After: 2, the helper sleeps exactly 2.0 seconds."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+
+    retry_after_ctx = _make_response(429, None, headers={"Retry-After": "2"})
+    ok_ctx = _make_response(200, _SAMPLE_PREFS)
+
+    session = _make_session()
+    session.get = MagicMock(side_effect=[retry_after_ctx, ok_ctx])
+    _inject_session(client, session)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await client.get_my_preferences(discord_id=_DISCORD_ID)
+
+    mock_sleep.assert_awaited_once_with(2.0)
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_caps_retry_after() -> None:
+    """On 429 with Retry-After: 600 (above cap), falls through to exponential.
+
+    The first retry sleep must use the exponential schedule value (1.0),
+    not the header value (600) or the cap (30).
+    """
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+
+    retry_after_ctx = _make_response(429, None, headers={"Retry-After": "600"})
+    ok_ctx = _make_response(200, _SAMPLE_PREFS)
+
+    session = _make_session()
+    session.get = MagicMock(side_effect=[retry_after_ctx, ok_ctx])
+    _inject_session(client, session)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await client.get_my_preferences(discord_id=_DISCORD_ID)
+
+    mock_sleep.assert_awaited_once_with(1.0)
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_uses_exponential_when_header_absent() -> None:
+    """On persistent 429 with no Retry-After header, sleeps 1.0, 2.0, 4.0."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+
+    session = _make_session()
+    session.get = MagicMock(side_effect=[_make_response(429, None) for _ in range(4)])
+    _inject_session(client, session)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        with pytest.raises(SiegeWebRateLimitError):
+            await client.get_my_preferences(discord_id=_DISCORD_ID)
+
+    sleep_args = [call.args[0] for call in mock_sleep.await_args_list]
+    assert sleep_args == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_succeeds_on_third_attempt() -> None:
+    """Client succeeds on the 3rd attempt after two 429s (extended envelope)."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+
+    session = _make_session()
+    session.get = MagicMock(
+        side_effect=[
+            _make_response(429, None),
+            _make_response(429, None),
+            _make_response(200, _SAMPLE_PREFS),
+        ]
+    )
+    _inject_session(client, session)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await client.get_my_preferences(discord_id=_DISCORD_ID)
+
+    assert result == _SAMPLE_PREFS
+    assert session.get.call_count == 3
+    assert mock_sleep.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_call_with_retry_omits_headers_when_none() -> None:
+    """When called with headers=None, aiohttp kwargs must not contain 'headers'."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_CATALOG)
+    session = _make_session(get_response=resp_ctx)
+    _inject_session(client, session)
+
+    # list_catalog calls _call_with_retry without auth headers
+    await client.list_catalog()
+
+    call_kwargs = session.get.call_args[1] if session.get.call_args else {}
+    assert "headers" not in call_kwargs, (
+        "_call_with_retry must omit 'headers' key from aiohttp kwargs when "
+        "headers=None is passed"
+    )
 
 
 # ---------------------------------------------------------------------------

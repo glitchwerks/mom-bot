@@ -97,15 +97,37 @@ def _make_client(
 
 
 @pytest.mark.asyncio
-async def test_catalog_command_sends_ephemeral_reply() -> None:
-    """/post-conditions sends an ephemeral message."""
+async def test_catalog_command_defers_before_fetching() -> None:
+    """/post-conditions defers the interaction before calling siege-web."""
     interaction = _make_interaction()
     siege_client = _make_client()
 
     await post_conditions_catalog(interaction, siege_client=siege_client)
 
-    interaction.response.send_message.assert_awaited_once()
-    call_kwargs = interaction.response.send_message.call_args[1]
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_catalog_command_replies_via_followup() -> None:
+    """/post-conditions sends its reply through interaction.followup.send."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    interaction.followup.send.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_catalog_command_sends_ephemeral_reply() -> None:
+    """/post-conditions sends an ephemeral message via followup."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
     assert call_kwargs.get("ephemeral") is True
 
 
@@ -117,7 +139,7 @@ async def test_catalog_command_groups_by_meta() -> None:
 
     await post_conditions_catalog(interaction, siege_client=siege_client)
 
-    call_args = interaction.response.send_message.call_args
+    call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
     # Should contain role → Role, Affinity, Rarity and faction → Faction & League
     assert "Role, Affinity, Rarity" in content or "Faction & League" in content
@@ -135,9 +157,45 @@ async def test_catalog_command_does_not_send_auth_to_open_endpoint() -> None:
     siege_client.get_my_preferences.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_catalog_command_error_replies_via_followup() -> None:
+    """/post-conditions on fetch error sends error reply via followup (not send_message)."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+    siege_client.list_catalog = AsyncMock(side_effect=RuntimeError("boom"))
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    interaction.followup.send.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # /post-conditions-get (per-user read)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_command_defers_before_fetching() -> None:
+    """/post-conditions-get defers the interaction before calling siege-web."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+
+    await post_conditions_get(interaction, siege_client=siege_client)
+
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_get_command_replies_via_followup() -> None:
+    """/post-conditions-get sends its reply through interaction.followup.send."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+
+    await post_conditions_get(interaction, siege_client=siege_client)
+
+    interaction.followup.send.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -153,13 +211,13 @@ async def test_get_command_uses_invoking_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_get_command_sends_ephemeral_reply() -> None:
-    """/post-conditions-get is ephemeral."""
+    """/post-conditions-get reply is ephemeral (via followup)."""
     interaction = _make_interaction()
     siege_client = _make_client()
 
     await post_conditions_get(interaction, siege_client=siege_client)
 
-    call_kwargs = interaction.response.send_message.call_args[1]
+    call_kwargs = interaction.followup.send.call_args[1]
     assert call_kwargs.get("ephemeral") is True
 
 
@@ -171,24 +229,25 @@ async def test_get_command_empty_prefs_shows_none_set_message() -> None:
 
     await post_conditions_get(interaction, siege_client=siege_client)
 
-    call_args = interaction.response.send_message.call_args
+    call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
     assert "no post-condition preferences" in content.lower()
 
 
 @pytest.mark.asyncio
 async def test_get_command_404_shows_link_account_guidance() -> None:
-    """/post-conditions-get on 404 shows link-your-account guidance."""
+    """/post-conditions-get on 404 shows link-your-account guidance via followup."""
     interaction = _make_interaction()
     siege_client = _make_client()
     siege_client.get_my_preferences = AsyncMock(side_effect=SiegeWebNotFoundError())
 
     await post_conditions_get(interaction, siege_client=siege_client)
 
-    call_args = interaction.response.send_message.call_args
+    call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
     assert "rslsiege.com" in content.lower()
     assert call_args[1].get("ephemeral") is True
+    interaction.response.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -200,14 +259,54 @@ async def test_get_command_401_error_does_not_leak_token() -> None:
 
     await post_conditions_get(interaction, siege_client=siege_client)
 
-    call_args = interaction.response.send_message.call_args
+    call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
     assert _TOKEN not in content
+    interaction.response.send_message.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
 # /post-conditions-set (per-user write)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_command_defers_before_fetching() -> None:
+    """/post-conditions-set defers the interaction before calling siege-web."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+
+    with patch(
+        "mom_bot.post_conditions.commands.PostConditionsView",
+        autospec=True,
+    ) as MockView:
+        mock_view_instance = MagicMock()
+        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        MockView.return_value = mock_view_instance
+
+        await post_conditions_set(interaction, siege_client=siege_client)
+
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+
+
+@pytest.mark.asyncio
+async def test_set_command_replies_via_followup() -> None:
+    """/post-conditions-set sends its reply through interaction.followup.send."""
+    interaction = _make_interaction()
+    siege_client = _make_client()
+
+    with patch(
+        "mom_bot.post_conditions.commands.PostConditionsView",
+        autospec=True,
+    ) as MockView:
+        mock_view_instance = MagicMock()
+        mock_view_instance.build_header = MagicMock(return_value="Page 1 of 3")
+        MockView.return_value = mock_view_instance
+
+        await post_conditions_set(interaction, siege_client=siege_client)
+
+    interaction.followup.send.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -232,7 +331,7 @@ async def test_set_command_uses_invoking_user_id() -> None:
 
 @pytest.mark.asyncio
 async def test_set_command_sends_ephemeral_reply() -> None:
-    """/post-conditions-set sends an ephemeral response."""
+    """/post-conditions-set sends an ephemeral response via followup."""
     interaction = _make_interaction()
     siege_client = _make_client()
 
@@ -246,25 +345,24 @@ async def test_set_command_sends_ephemeral_reply() -> None:
 
         await post_conditions_set(interaction, siege_client=siege_client)
 
-    # Should have sent or deferred with ephemeral.
-    send_call = interaction.response.send_message.call_args
-    if send_call:
-        assert send_call[1].get("ephemeral") is True
+    call_kwargs = interaction.followup.send.call_args[1]
+    assert call_kwargs.get("ephemeral") is True
 
 
 @pytest.mark.asyncio
 async def test_set_command_404_shows_link_account_guidance() -> None:
-    """/post-conditions-set on 404 from GET shows link-your-account guidance."""
+    """/post-conditions-set on 404 from GET shows link-your-account guidance via followup."""
     interaction = _make_interaction()
     siege_client = _make_client()
     siege_client.get_my_preferences = AsyncMock(side_effect=SiegeWebNotFoundError())
 
     await post_conditions_set(interaction, siege_client=siege_client)
 
-    call_args = interaction.response.send_message.call_args
+    call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
     assert "rslsiege.com" in content.lower()
     assert call_args[1].get("ephemeral") is True
+    interaction.response.send_message.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
