@@ -796,3 +796,19 @@ class EditPreferencesView(discord.ui.View):
 
         # Dismiss button.
         self.add_item(_DismissButton())
+
+    def initial_embed(self) -> discord.Embed:
+        """Build a selection-summary embed from the view's current state.
+
+        Converts the flat ``selections`` dict into the meta-keyed shape
+        expected by :func:`build_summary_embed` and returns the resulting
+        :class:`discord.Embed`.  Intended to be called once at message-send
+        time so the initial ephemeral already reflects pre-existing
+        preferences.
+
+        Returns:
+            A :class:`discord.Embed` ready to pass as ``embed=`` in the
+            ``interaction.followup.send`` call that opens this view.
+        """
+        meta_keyed = _selections_to_meta_keyed(self.selections, self._pages)
+        return build_summary_embed(self._pages, meta_keyed)

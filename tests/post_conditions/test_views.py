@@ -917,3 +917,68 @@ async def test_dismiss_button_edits_message_with_no_view() -> None:
     interaction.response.edit_message.assert_awaited_once()
     call_kwargs = interaction.response.edit_message.call_args.kwargs
     assert call_kwargs.get("view") is None
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView.initial_embed — convenience method
+# ---------------------------------------------------------------------------
+
+
+def test_initial_embed_returns_discord_embed() -> None:
+    """initial_embed() returns a discord.Embed instance."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    embed = view.initial_embed()
+    assert isinstance(embed, discord.Embed)
+
+
+def test_initial_embed_empty_preferences_shows_none_selected() -> None:
+    """initial_embed() with no preferences shows '_None selected yet.' text."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    embed = view.initial_embed()
+    assert embed.description is not None
+    assert "_None selected yet._" in embed.description
+
+
+def test_initial_embed_with_preferences_shows_selection_text() -> None:
+    """initial_embed() with preferences shows selected items, not empty state."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[1, 3],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    embed = view.initial_embed()
+    assert embed.description is not None
+    assert "_None selected yet._" not in embed.description
+    assert "Only Barbarian Champions." in embed.description
+    assert "Only HP Champions." in embed.description
+
+
+def test_initial_embed_equals_build_summary_embed_output() -> None:
+    """initial_embed() output equals calling build_summary_embed directly."""
+    preferences = [1, 3]
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=preferences,
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    embed_from_method = view.initial_embed()
+
+    # Build the expected embed the long way.
+    pages = view._pages
+    meta_keyed = _selections_to_meta_keyed(view.selections, pages)
+    expected_embed = build_summary_embed(pages, meta_keyed)
+
+    assert embed_from_method.description == expected_embed.description
+    assert embed_from_method.title == expected_embed.title
