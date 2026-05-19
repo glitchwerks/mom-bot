@@ -49,7 +49,8 @@ async def seed_day_role_map(
     For each guild visible to *client* and each attack day in
     ``_ATTACK_DAYS``:
 
-    - If a role named ``"Attack Day {day}"`` is not found on the guild, log
+    - If a role matching ``DAY_ROLE_NAME_TEMPLATE`` (e.g.
+      ``"Siege - Day {day} Attacker"``) is not found on the guild, log
       a WARNING with the sentinel ``DAY_ROLE_NOT_FOUND`` and skip to the
       next day.
     - If no row exists in ``day_role_map``, insert one and log INFO with
