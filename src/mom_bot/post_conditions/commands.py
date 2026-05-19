@@ -110,10 +110,14 @@ async def post_conditions_catalog(
         interaction: The Discord slash-command interaction.
         siege_client: The siege-web HTTP client instance.
     """
+    discord_id = str(interaction.user.id)
     try:
         catalog = await siege_client.list_catalog()
     except Exception:
-        _logger.exception("Failed to fetch post-condition catalog.")
+        _logger.exception(
+            "Failed to fetch post-condition catalog for discord_id=%s",
+            discord_id,
+        )
         await interaction.response.send_message(_OPS_ERROR_MSG, ephemeral=True)
         return
 

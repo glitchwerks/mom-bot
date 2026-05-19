@@ -112,6 +112,9 @@ class MomBot(discord.Client):
             stored to prevent garbage collection.
         _health_runner: The aiohttp AppRunner for the /healthz server;
             stored so :meth:`close` can shut it down cleanly.
+        _siege_client: The :class:`~mom_bot.post_conditions.client.\
+SiegeWebClient` instance registered via :func:`make_client`; stored so
+            :meth:`close` can close its aiohttp session on shutdown.
     """
 
     def __init__(self, intents: discord.Intents) -> None:
@@ -126,6 +129,7 @@ class MomBot(discord.Client):
         self.guild: discord.Object | None = None
         self._reminder_task: asyncio.Task[None] | None = None
         self._health_runner: web.AppRunner | None = None
+        self._siege_client: SiegeWebClient | None = None
 
     async def setup_hook(self) -> None:
         """Sync slash commands and spawn the post-READY init task.
@@ -268,19 +272,31 @@ class MomBot(discord.Client):
             )
 
     async def close(self) -> None:
-        """Shut down the health server then close the gateway connection.
+        """Shut down ancillary resources then close the gateway connection.
 
-        Overrides :meth:`discord.Client.close` to ensure the aiohttp runner
-        started in :meth:`setup_hook` is cleaned up before the process exits.
-        Cleanup is best-effort: a failure here is logged but not re-raised so
-        the gateway close still proceeds.
+        Overrides :meth:`discord.Client.close` to ensure the aiohttp health
+        server runner and the siege-web HTTP client session are cleaned up
+        before the process exits.  All cleanup is best-effort: failures are
+        logged but not re-raised so the gateway close still proceeds.
         """
         if self._health_runner is not None:
             try:
                 await self._health_runner.cleanup()
                 _logger.info("Health server shut down cleanly")
             except Exception:
-                _logger.warning("Health server shutdown encountered an error", exc_info=True)
+                _logger.warning(
+                    "Health server shutdown encountered an error",
+                    exc_info=True,
+                )
+        if self._siege_client is not None:
+            try:
+                await self._siege_client.close()
+                _logger.info("SiegeWebClient session closed cleanly")
+            except Exception:
+                _logger.warning(
+                    "SiegeWebClient session close encountered an error",
+                    exc_info=True,
+                )
         await super().close()
 
 
@@ -363,6 +379,8 @@ client.SiegeWebClient` to use for the post-condition commands.  When
             base_url=load_secret("siege-web-url"),
             token=load_secret("siege-web-bot-token"),
         )
+    # Store on the bot so MomBot.close() can close the aiohttp session.
+    client._siege_client = siege_client
     _register_post_conditions(tree=client.tree, siege_client=siege_client)
 
     return client

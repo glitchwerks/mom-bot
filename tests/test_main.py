@@ -15,7 +15,7 @@ Design decisions:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -145,3 +145,50 @@ def test_make_client_registers_post_condition_commands() -> None:
     assert (
         "post-conditions-set" in command_names
     ), f"Expected 'post-conditions-set' in command tree; found: {command_names!r}"
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — make_client stores siege_client on the bot for shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_make_client_stores_siege_client_on_bot() -> None:
+    """make_client() must store the siege_client on the bot for shutdown.
+
+    :meth:`MomBot.close` calls ``siege_client.close()`` on shutdown.
+    This requires the client to be stored on the bot instance.
+    """
+    from mom_bot.main import make_client
+
+    mock_siege = MagicMock()
+    bot = make_client(siege_client=mock_siege)
+
+    assert (
+        bot._siege_client is mock_siege
+    ), "Expected make_client to store siege_client on bot._siege_client"
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — MomBot.close() calls siege_client.close()
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mom_bot_close_calls_siege_client_close() -> None:
+    """MomBot.close() must call siege_client.close() on shutdown.
+
+    Verifies the shutdown lifecycle: :meth:`MomBot.close` must await
+    ``_siege_client.close()`` so the aiohttp session is released.
+    """
+    from mom_bot.main import make_client
+
+    mock_siege = MagicMock()
+    mock_siege.close = AsyncMock()
+
+    bot = make_client(siege_client=mock_siege)
+
+    # Patch discord.Client.close so we don't need a live gateway.
+    with patch("discord.Client.close", new_callable=AsyncMock):
+        await bot.close()
+
+    mock_siege.close.assert_called_once()

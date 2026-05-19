@@ -16,12 +16,24 @@ Security contract
 Usage
 -----
 Construct once at bot startup (token is resolved via ``load_secret``) and
-pass the same instance to every command handler::
+pass the same instance to every command handler.  The client reuses a
+single ``aiohttp.ClientSession`` across all calls for efficiency; call
+:meth:`close` (or use as an async context manager) on shutdown::
+
+    async with SiegeWebClient(
+        base_url=load_secret("siege-web-url"),
+        token=load_secret("siege-web-bot-token"),
+    ) as client:
+        ...
+
+Or manage lifetime manually::
 
     client = SiegeWebClient(
         base_url=load_secret("siege-web-url"),
         token=load_secret("siege-web-bot-token"),
     )
+    # ... use client ...
+    await client.close()
 """
 
 from __future__ import annotations
@@ -100,9 +112,9 @@ class SiegeWebClient:
     - ``GET /api/members/me/preferences``    — read a member's preferences.
     - ``PUT /api/members/me/preferences``    — replace a member's preferences.
 
-    The client constructs a fresh ``aiohttp.ClientSession`` per call so it
-    is safe to create at bot startup and reuse across the process lifetime
-    without managing connection lifecycle externally.
+    A single :class:`aiohttp.ClientSession` is created lazily on first use
+    and reused across all subsequent calls.  Call :meth:`close` when the
+    client is no longer needed (or use it as an async context manager).
 
     Attributes:
         base_url: The scheme+host root of the siege-web deployment
@@ -112,6 +124,9 @@ class SiegeWebClient:
     def __init__(self, base_url: str, token: str) -> None:
         """Initialise the client with the siege-web base URL and bot token.
 
+        The underlying ``aiohttp.ClientSession`` is created lazily on first
+        use via :meth:`_get_session`.
+
         Args:
             base_url: Siege-web root URL (e.g. ``"https://rslsiege.com"``).
                 Must not end with a trailing slash.
@@ -120,6 +135,59 @@ class SiegeWebClient:
         """
         self.base_url = base_url.rstrip("/")
         self._token = token
+        self._session: aiohttp.ClientSession | None = None
+
+    # ------------------------------------------------------------------
+    # Async context manager support
+    # ------------------------------------------------------------------
+
+    async def __aenter__(self) -> SiegeWebClient:
+        """Return self; session is created lazily on first API call.
+
+        Returns:
+            This :class:`SiegeWebClient` instance.
+        """
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc_val: object,
+        exc_tb: object,
+    ) -> None:
+        """Close the underlying session on context-manager exit.
+
+        Args:
+            exc_type: Exception type, if any.
+            exc_val: Exception value, if any.
+            exc_tb: Exception traceback, if any.
+        """
+        await self.close()
+
+    # ------------------------------------------------------------------
+    # Session lifecycle
+    # ------------------------------------------------------------------
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Return the shared session, creating it lazily on first call.
+
+        Returns:
+            The :class:`aiohttp.ClientSession` for this client instance.
+        """
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    async def close(self) -> None:
+        """Close the underlying aiohttp session and release connections.
+
+        Safe to call when no session has been created yet.  After closing,
+        the session is set to ``None`` so subsequent API calls will
+        transparently re-create it.
+        """
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -132,7 +200,8 @@ class SiegeWebClient:
             discord_id: The invoking user's Discord snowflake as a string.
 
         Returns:
-            A dict with ``Authorization`` and ``X-Acting-Discord-Id`` entries.
+            A dict with ``Authorization`` and ``X-Acting-Discord-Id``
+            entries.
         """
         return {
             "Authorization": f"Bearer {self._token}",
@@ -163,6 +232,63 @@ class SiegeWebClient:
                 "siege-web returned 422 — request body failed validation."
             )
 
+    async def _call_with_retry(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        json: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Perform a single HTTP request, retrying once on 429.
+
+        Issues the request using the shared session.  On a 429 response,
+        waits :data:`_RETRY_BACKOFF` seconds and tries once more.  A second
+        consecutive 429 raises :class:`SiegeWebRateLimitError`.  Any other
+        non-2xx status delegates to :meth:`_raise_for_status`.
+
+        Args:
+            method: HTTP verb, one of ``"get"`` or ``"put"``.
+            url: Full request URL including scheme and path.
+            headers: HTTP headers to include in the request.
+            json: Optional request body as a dict (serialised to JSON).
+
+        Returns:
+            The parsed JSON response body as a list of dicts.
+
+        Raises:
+            SiegeWebRateLimitError: If 429 is received on both attempts.
+            SiegeWebAuthError: On 401.
+            SiegeWebNotFoundError: On 404.
+            SiegeWebValidationError: On 422.
+        """
+        session = await self._get_session()
+        request = getattr(session, method)
+        kwargs: dict[str, Any] = {"headers": headers}
+        if json is not None:
+            kwargs["json"] = json
+
+        async with request(url, **kwargs) as resp:
+            if resp.status == 429:
+                _logger.warning(
+                    "siege-web returned 429 on %s %s; retrying after backoff.",
+                    method.upper(),
+                    url,
+                )
+                await asyncio.sleep(_RETRY_BACKOFF)
+                async with request(url, **kwargs) as retry_resp:
+                    if retry_resp.status == 429:
+                        raise SiegeWebRateLimitError(
+                            f"siege-web rate-limited {method.upper()} {url} "
+                            "on both initial attempt and retry."
+                        )
+                    self._raise_for_status(retry_resp.status)
+                    result: list[dict[str, Any]] = await retry_resp.json()
+                    return result
+
+            self._raise_for_status(resp.status)
+            data: list[dict[str, Any]] = await resp.json()
+            return data
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -175,6 +301,7 @@ class SiegeWebClient:
 
         Calls ``GET /api/reference/post-conditions`` without authentication.
         An optional ``stronghold_level`` query parameter filters the results.
+        This endpoint does not use the auth headers and does not retry on 429.
 
         Args:
             stronghold_level: If provided, passed as ``?stronghold_level=N``
@@ -184,7 +311,8 @@ class SiegeWebClient:
             A list of PostConditionResponse dicts.
 
         Raises:
-            SiegeWebAuthError: On 401 (should not occur for this open endpoint).
+            SiegeWebAuthError: On 401 (should not occur for this open
+                endpoint).
             SiegeWebNotFoundError: On 404.
             SiegeWebValidationError: On 422.
         """
@@ -193,11 +321,11 @@ class SiegeWebClient:
         if stronghold_level is not None:
             params["stronghold_level"] = stronghold_level
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, params=params) as resp:
-                self._raise_for_status(resp.status)
-                result: list[dict[str, Any]] = await resp.json()
-                return result
+        session = await self._get_session()
+        async with session.get(url, params=params) as resp:
+            self._raise_for_status(resp.status)
+            result: list[dict[str, Any]] = await resp.json()
+            return result
 
     async def get_my_preferences(
         self,
@@ -209,7 +337,8 @@ class SiegeWebClient:
         auth headers.  A single 429 retry is attempted before raising.
 
         Args:
-            discord_id: The invoking user's Discord snowflake (numeric string).
+            discord_id: The invoking user's Discord snowflake (numeric
+                string).
 
         Returns:
             A list of PostConditionResponse dicts (may be empty if the user
@@ -217,33 +346,14 @@ class SiegeWebClient:
 
         Raises:
             SiegeWebAuthError: On 401 (wrong token or missing header).
-            SiegeWebNotFoundError: On 404 (user not registered in siege-web).
+            SiegeWebNotFoundError: On 404 (user not registered in
+                siege-web).
             SiegeWebValidationError: On 422.
             SiegeWebRateLimitError: On repeated 429.
         """
         url = f"{self.base_url}/api/members/me/preferences"
         headers = self._auth_headers(discord_id)
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as resp:
-                if resp.status == 429:
-                    _logger.warning(
-                        "siege-web returned 429 on GET /me/preferences; " "retrying after backoff."
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF)
-                    async with session.get(url, headers=headers) as retry_resp:
-                        if retry_resp.status == 429:
-                            raise SiegeWebRateLimitError(
-                                "siege-web rate-limited GET /me/preferences "
-                                "on both initial attempt and retry."
-                            )
-                        self._raise_for_status(retry_resp.status)
-                        result: list[dict[str, Any]] = await retry_resp.json()
-                        return result
-
-                self._raise_for_status(resp.status)
-                data: list[dict[str, Any]] = await resp.json()
-                return data
+        return await self._call_with_retry("get", url, headers)
 
     async def set_my_preferences(
         self,
@@ -252,14 +362,15 @@ class SiegeWebClient:
     ) -> list[dict[str, Any]]:
         """Replace the invoking user's post-condition preferences.
 
-        Calls ``PUT /api/members/me/preferences`` with a replacement-set body.
-        This is idempotent: submitting the same IDs twice is a no-op server-side.
-        Submitting an empty list clears all preferences.
+        Calls ``PUT /api/members/me/preferences`` with a replacement-set
+        body.  This is idempotent: submitting the same IDs twice is a no-op
+        server-side.  Submitting an empty list clears all preferences.
 
         Args:
-            discord_id: The invoking user's Discord snowflake (numeric string).
-            ids: The complete desired set of post-condition IDs.  Each ID must
-                exist in siege-web's database.
+            discord_id: The invoking user's Discord snowflake (numeric
+                string).
+            ids: The complete desired set of post-condition IDs.  Each ID
+                must exist in siege-web's database.
 
         Returns:
             The updated list of PostConditionResponse dicts as returned by
@@ -274,24 +385,4 @@ class SiegeWebClient:
         url = f"{self.base_url}/api/members/me/preferences"
         headers = self._auth_headers(discord_id)
         body = {"post_condition_ids": ids}
-
-        async with aiohttp.ClientSession() as session:
-            async with session.put(url, headers=headers, json=body) as resp:
-                if resp.status == 429:
-                    _logger.warning(
-                        "siege-web returned 429 on PUT /me/preferences; " "retrying after backoff."
-                    )
-                    await asyncio.sleep(_RETRY_BACKOFF)
-                    async with session.put(url, headers=headers, json=body) as retry_resp:
-                        if retry_resp.status == 429:
-                            raise SiegeWebRateLimitError(
-                                "siege-web rate-limited PUT /me/preferences "
-                                "on both initial attempt and retry."
-                            )
-                        self._raise_for_status(retry_resp.status)
-                        result: list[dict[str, Any]] = await retry_resp.json()
-                        return result
-
-                self._raise_for_status(resp.status)
-                data: list[dict[str, Any]] = await resp.json()
-                return data
+        return await self._call_with_retry("put", url, headers, json=body)

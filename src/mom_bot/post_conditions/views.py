@@ -24,7 +24,7 @@ flattened into a single list and submitted via a single PUT call.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 import discord
 import discord.ui
@@ -72,10 +72,18 @@ def _build_select(
         )
         for cond in conditions
     ]
+    # Guard against an empty options list — a Select with 0 options is
+    # non-functional and discord.py raises if max_values < 1.  Callers
+    # (group_by_meta) already filter empty groups, but we defend here too.
+    if not options:
+        raise ValueError(
+            f"_build_select called with no options for meta_label={meta_label!r}. "
+            "Callers must filter empty groups before building a Select."
+        )
     select: discord.ui.Select[Any] = discord.ui.Select(
         placeholder=f"Pick preferences ({meta_label})",
         min_values=0,
-        max_values=max(len(options), 1),
+        max_values=len(options),
         options=options,
     )
     return select
@@ -254,10 +262,10 @@ set_my_preferences`.
         async def _on_select(
             sel_interaction: discord.Interaction,
         ) -> None:
-            # interaction.data for Select components is a dict-like object;
-            # the typed stubs do not narrow it here, so we use getattr
-            # with a fallback to avoid mypy union-attr errors.
-            values: list[str] = getattr(sel_interaction.data, "get", lambda k, d: d)("values", [])
+            # interaction.data is typed as a union; cast to dict[str, Any]
+            # so mypy accepts the .get() call without a union-attr error.
+            data = cast(dict[str, Any], sel_interaction.data or {})
+            values: list[str] = list(data.get("values", []))
             self.selections[_label] = {int(v) for v in values}
             await sel_interaction.response.defer()
 
