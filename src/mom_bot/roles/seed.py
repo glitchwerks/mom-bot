@@ -1,9 +1,10 @@
 """Seed and refresh the ``day_role_map`` table on bot startup (Epic 2.6).
 
 Called from :meth:`~mom_bot.main.MomBot.on_ready` once the gateway is live.
-Iterates the bot's guilds, finds Discord roles named ``"Attack Day {N}"`` for
-days 1 and 2, and upserts them into the ``day_role_map`` table with
-structured logging of any rename or snowflake-change events.
+Iterates the bot's guilds, finds Discord roles named
+``"Siege - Day {N} Attacker"`` for days 1 and 2, and upserts them into the
+``day_role_map`` table with structured logging of any rename or
+snowflake-change events.
 
 Idempotency guarantee: calling this function twice in a row with no
 intervening Discord changes produces zero database writes on the second call.
@@ -24,13 +25,19 @@ from mom_bot.roles.models import DayRoleMap
 if TYPE_CHECKING:
     import discord
 
-__all__ = ["seed_day_role_map"]
+__all__ = ["DAY_ROLE_NAME_TEMPLATE", "seed_day_role_map"]
 
 _logger = logging.getLogger(__name__)
 
 # Attack days the seed routine manages.  Hardcoded per issue #62 — only
 # days 1 and 2 exist in the current RAID cadence.
 _ATTACK_DAYS = (1, 2)
+
+# Discord role name pattern used to locate siege-day roles on each guild.
+# Live logs from ca-mom-bot--0000010 (issue #127) confirmed both prod guilds
+# use this naming convention rather than the previously hardcoded
+# "Attack Day {day}" pattern.
+DAY_ROLE_NAME_TEMPLATE = "Siege - Day {day} Attacker"
 
 
 async def seed_day_role_map(
@@ -65,7 +72,7 @@ async def seed_day_role_map(
     """
     for guild in client.guilds:
         for day in _ATTACK_DAYS:
-            role_name = f"Attack Day {day}"
+            role_name = DAY_ROLE_NAME_TEMPLATE.format(day=day)
 
             # Locate the role on this guild by name.
             role = next(

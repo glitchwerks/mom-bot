@@ -35,9 +35,9 @@ _ROLE_ID_DAY1 = 222_000_000_000_000_001
 _ROLE_ID_DAY2 = 222_000_000_000_000_002
 _ROLE_ID_DAY1_NEW = 333_000_000_000_000_001  # simulates snowflake change
 
-_ROLE_NAME_DAY1 = "Attack Day 1"
-_ROLE_NAME_DAY2 = "Attack Day 2"
-_ROLE_NAME_DAY1_RENAMED = "Attack Day 1 (renamed)"
+_ROLE_NAME_DAY1 = "Siege - Day 1 Attacker"
+_ROLE_NAME_DAY2 = "Siege - Day 2 Attacker"
+_ROLE_NAME_DAY1_RENAMED = "Siege - Day 1 Attacker (renamed)"
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +299,8 @@ async def test_seed_logs_warning_when_role_missing(
     # The searched name must appear under expected=.
     assert "expected=" in combined, f"Expected 'expected=' in log message; got: {combined}"
     assert (
-        "Attack Day 1" in combined
-    ), f"Expected searched role name 'Attack Day 1' in log; got: {combined}"
+        "Siege - Day 1 Attacker" in combined
+    ), f"Expected searched role name 'Siege - Day 1 Attacker' in log; got: {combined}"
 
     # The available roles must appear under available=.
     assert "available=" in combined, f"Expected 'available=' in log message; got: {combined}"
