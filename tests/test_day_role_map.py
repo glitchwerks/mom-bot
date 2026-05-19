@@ -258,11 +258,16 @@ async def test_seed_logs_warning_when_role_missing(
     session_factory: sessionmaker[Session],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Guild with no 'Attack Day 1' role → WARNING with DAY_ROLE_NOT_FOUND.
+    """Guild with no 'Attack Day 1' role → WARNING with enriched context.
 
     Confirms that when the guild's role list does not contain a role named
-    ``"Attack Day {day}"``, the seed routine logs a WARNING containing the
-    sentinel string ``DAY_ROLE_NOT_FOUND`` and continues without crashing.
+    ``"Attack Day {day}"``, the seed routine logs a WARNING containing:
+
+    - The sentinel string ``DAY_ROLE_NOT_FOUND``.
+    - ``expected=`` showing the literal role name being searched for.
+    - ``available=`` showing the guild's actual role names.
+
+    The routine must continue without crashing and still seed day 2.
 
     Args:
         session_factory: In-memory session factory from the fixture.
@@ -289,8 +294,97 @@ async def test_seed_logs_warning_when_role_missing(
         f"got: {[r.getMessage() for r in caplog.records]}"
     )
 
+    combined = " ".join(warning_msgs)
+
+    # The searched name must appear under expected=.
+    assert "expected=" in combined, (
+        f"Expected 'expected=' in log message; got: {combined}"
+    )
+    assert "Attack Day 1" in combined, (
+        f"Expected searched role name 'Attack Day 1' in log; got: {combined}"
+    )
+
+    # The available roles must appear under available=.
+    assert "available=" in combined, (
+        f"Expected 'available=' in log message; got: {combined}"
+    )
+    assert _ROLE_NAME_DAY2 in combined, (
+        f"Expected guild role '{_ROLE_NAME_DAY2}' in available= list; "
+        f"got: {combined}"
+    )
+
     # Day 2 row should still be inserted even though day 1 was skipped.
     with session_factory() as session:
         rows = session.execute(select(DayRoleMap)).scalars().all()
     assert len(rows) == 1
     assert rows[0].day_number == 2
+
+
+# ---------------------------------------------------------------------------
+# Test 5: available= list reflects guild roles when names differ from expected
+# ---------------------------------------------------------------------------
+
+
+async def test_seed_warning_available_reflects_actual_guild_roles(
+    session_factory: sessionmaker[Session],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Guild with differently-named roles → available= shows those names sorted.
+
+    Simulates the name-mismatch root cause from issue #127: the guild has
+    roles but none matches ``"Attack Day {N}"``.  Verifies that
+    ``available=`` in the WARNING log contains the guild's actual role names
+    in sorted order, enabling operators to see the mismatch at a glance.
+
+    Args:
+        session_factory: In-memory session factory from the fixture.
+        caplog: pytest log-capture fixture for asserting log output.
+    """
+    from mom_bot.roles.seed import seed_day_role_map
+
+    # Guild has roles with non-matching names (e.g. "Day 1" / "Day 2").
+    _WRONG_ROLE_ID_1 = 444_000_000_000_000_001
+    _WRONG_ROLE_ID_2 = 444_000_000_000_000_002
+    _WRONG_NAME_1 = "Day 1"
+    _WRONG_NAME_2 = "Day 2"
+
+    client = _make_mock_client(
+        _GUILD_ID,
+        [(_WRONG_ROLE_ID_1, _WRONG_NAME_1), (_WRONG_ROLE_ID_2, _WRONG_NAME_2)],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="mom_bot.roles.seed"):
+        await seed_day_role_map(client, session_factory)
+
+    warning_msgs = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "DAY_ROLE_NOT_FOUND" in r.getMessage()
+    ]
+    assert len(warning_msgs) >= 1, (
+        "Expected at least one WARNING with 'DAY_ROLE_NOT_FOUND'; "
+        f"got: {[r.getMessage() for r in caplog.records]}"
+    )
+
+    combined = " ".join(warning_msgs)
+
+    # Both wrong-named roles must appear in available= so the operator can
+    # see the exact names present on the guild.
+    assert _WRONG_NAME_1 in combined, (
+        f"Expected '{_WRONG_NAME_1}' in available= list; got: {combined}"
+    )
+    assert _WRONG_NAME_2 in combined, (
+        f"Expected '{_WRONG_NAME_2}' in available= list; got: {combined}"
+    )
+
+    # The available list must be sorted (repr of a sorted Python list).
+    # "Day 1" < "Day 2" lexicographically, so Day 1 must appear first.
+    assert combined.index(_WRONG_NAME_1) < combined.index(_WRONG_NAME_2), (
+        f"Expected '{_WRONG_NAME_1}' to appear before '{_WRONG_NAME_2}' "
+        f"(sorted order) in: {combined}"
+    )
+
+    # No rows should be inserted — none of the roles matched.
+    with session_factory() as session:
+        rows = session.execute(select(DayRoleMap)).scalars().all()
+    assert len(rows) == 0

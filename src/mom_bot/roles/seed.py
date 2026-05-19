@@ -73,10 +73,14 @@ async def seed_day_role_map(
                 None,
             )
             if role is None:
+                available = sorted(r.name for r in guild.roles)
                 _logger.warning(
-                    "DAY_ROLE_NOT_FOUND guild_id=%s day=%s",
+                    "DAY_ROLE_NOT_FOUND guild_id=%s day=%s"
+                    " expected=%r available=%r",
                     guild.id,
                     day,
+                    role_name,
+                    available,
                 )
                 continue
 
