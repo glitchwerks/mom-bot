@@ -278,9 +278,9 @@ async def test_list_catalog_does_not_send_auth_header() -> None:
     await client.list_catalog()
 
     call_kwargs = session.get.call_args[1] if session.get.call_args else {}
-    # After D10, _call_with_retry omits the 'headers' key entirely when the
-    # caller passes headers=None.  Accept both the old shape (headers={}) and
-    # the new shape (key absent) so this assertion survives the transition.
+    # When called with headers=None, _call_with_retry omits the kwarg from
+    # the aiohttp call entirely (issue #130).  Accept both the old shape
+    # (headers={}) and the new shape (key absent) so this assertion is robust.
     assert "headers" not in call_kwargs or "Authorization" not in call_kwargs.get(
         "headers", {}
     ), "Catalog endpoint must not receive Authorization header"

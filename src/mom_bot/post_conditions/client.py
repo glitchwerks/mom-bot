@@ -388,6 +388,11 @@ class SiegeWebClient:
         Restarting the bot or waiting for TTL expiry are the available escape
         hatches.
 
+        Cache size is bounded by the number of distinct ``stronghold_level``
+        values queried (in practice a small, finite set — typically < 20).
+        No LRU eviction is performed; entries are overwritten in-place when
+        refreshed.
+
         Args:
             stronghold_level: If provided, passed as ``?stronghold_level=N``
                 to the catalog endpoint.  Cache is keyed by this value;
