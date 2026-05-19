@@ -62,7 +62,8 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 # Exponential backoff schedule for 429 retries (seconds per attempt index).
-# Three retries → four total attempts; worst-case wait is 1+2+4 = 7 seconds.
+# Three retries → four total attempts; worst-case wait is
+# sum(_RETRY_BACKOFF_SCHEDULE) seconds (currently 7s).
 _RETRY_BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 # Maximum number of seconds we will honour from a ``Retry-After`` header.
@@ -351,7 +352,7 @@ class SiegeWebClient:
 
             sleep_for = retry_after if retry_after is not None else _RETRY_BACKOFF_SCHEDULE[attempt]
             _logger.warning(
-                "siege-web returned 429 on %s %s (attempt %d/%d); " "sleeping %.1fs before retry.",
+                "siege-web returned 429 on %s %s (attempt %d/%d); sleeping %.1fs before retry.",
                 method.upper(),
                 url,
                 attempt + 1,
@@ -406,16 +407,30 @@ class SiegeWebClient:
             {"stronghold_level": stronghold_level} if stronghold_level is not None else None
         )
 
+        # Fast path: check the cache without acquiring the lock.  This avoids
+        # serialising concurrent callers for different stronghold_level keys
+        # when their entries are already warm.
+        cached = self._catalog_cache.get(stronghold_level)
+        if cached is not None:
+            ts, payload = cached
+            if time.monotonic() - ts < _CATALOG_CACHE_TTL:
+                _logger.debug(
+                    "catalog cache HIT stronghold_level=%s",
+                    stronghold_level,
+                )
+                return payload
+
+        # Slow path: cache miss or stale entry — acquire the lock, then
+        # re-check (another coroutine may have populated the entry while we
+        # were waiting).
         async with self._catalog_cache_lock:
             cached = self._catalog_cache.get(stronghold_level)
             if cached is not None:
                 ts, payload = cached
-                age = time.monotonic() - ts
-                if age < _CATALOG_CACHE_TTL:
+                if time.monotonic() - ts < _CATALOG_CACHE_TTL:
                     _logger.debug(
-                        "siege-web catalog cache hit " "(stronghold_level=%s, age=%.1fs).",
+                        "catalog cache HIT (after lock) stronghold_level=%s",
                         stronghold_level,
-                        age,
                     )
                     return payload
 

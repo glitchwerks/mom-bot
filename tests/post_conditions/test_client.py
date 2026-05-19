@@ -642,6 +642,92 @@ async def test_list_catalog_concurrent_requests_share_fetch() -> None:
     ), "Lock must prevent concurrent cold-cache misses from double-fetching"
 
 
+@pytest.mark.asyncio
+async def test_list_catalog_concurrent_different_keys_dont_serialize() -> None:
+    """Cache hit on key=None must not block a concurrent miss on key=5.
+
+    Strategy: start ``list_catalog(5)`` first so it acquires the lock and
+    enters the (stalled) HTTP fetch.  While the lock is held, start
+    ``list_catalog(None)`` which has a pre-warmed cache entry.  With
+    double-checked locking (DCL), ``list_catalog(None)`` returns immediately
+    via the lock-free fast path.  Without DCL (old code), it blocks behind
+    the lock until key=5's HTTP call finishes.
+
+    We observe this by recording the order of completion: ``none_done``
+    must be set *before* ``five_done`` even though ``list_catalog(5)``
+    started first.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+
+    # Pre-warm the cache for key=None.
+    client._catalog_cache[None] = (_time.monotonic(), _SAMPLE_CATALOG)
+
+    key5_result: list[dict[str, Any]] = [{"id": 99}]
+
+    # Event pair to stall the key=5 HTTP call until we choose to release it.
+    fetch_started = _asyncio.Event()
+    fetch_release = _asyncio.Event()
+
+    # Patch _call_with_retry so key=5's "HTTP call" blocks on fetch_release.
+    async def _stalling_call_with_retry(
+        method: str,
+        url: str,
+        *,
+        headers: Any,
+        params: Any = None,
+        json: Any = None,
+    ) -> list[dict[str, Any]]:
+        fetch_started.set()
+        await fetch_release.wait()
+        return key5_result
+
+    client._call_with_retry = _stalling_call_with_retry  # type: ignore[method-assign]
+
+    completion_order: list[str] = []
+
+    async def _call_five() -> list[dict[str, Any]]:
+        result = await client.list_catalog(stronghold_level=5)
+        completion_order.append("five")
+        return result
+
+    async def _call_none() -> list[dict[str, Any]]:
+        # Yield once so _call_five starts first and acquires the lock.
+        await _asyncio.sleep(0)
+        result = await client.list_catalog(stronghold_level=None)
+        completion_order.append("none")
+        return result
+
+    task_five = _asyncio.create_task(_call_five())
+    task_none = _asyncio.create_task(_call_none())
+
+    # Wait until key=5 has entered its stalled fetch (lock is now held by it).
+    await _asyncio.wait_for(fetch_started.wait(), timeout=2.0)
+
+    # Yield to let _call_none run as far as it can while the lock is held.
+    await _asyncio.sleep(0)
+    await _asyncio.sleep(0)
+
+    # With DCL, _call_none should have already completed (fast path bypasses
+    # the lock entirely).  Without DCL it would still be waiting on the lock.
+    assert "none" in completion_order, (
+        "list_catalog(None) should have returned via DCL fast path while "
+        "key=5's lock-held fetch was still in progress"
+    )
+    assert (
+        "five" not in completion_order
+    ), "list_catalog(5) should still be blocked on the stalled HTTP call"
+
+    # Release the stall and let both tasks finish.
+    fetch_release.set()
+    result_none, result_five = await _asyncio.gather(task_none, task_five)
+
+    assert result_none == _SAMPLE_CATALOG
+    assert result_five == key5_result
+
+
 # ---------------------------------------------------------------------------
 # _call_with_retry — Retry-After / exponential backoff / helper contract
 # ---------------------------------------------------------------------------
