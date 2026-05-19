@@ -2,7 +2,7 @@
 
 Covers: page navigation preserving selections, pre-population from initial
 GET state, Commit flattening, Cancel discarding, using a fake interaction,
-and the live-updating selection-summary embed.
+the live-updating selection-summary embed, and EditPreferencesView.
 """
 
 from __future__ import annotations
@@ -13,7 +13,9 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+from mom_bot.post_conditions.modal_layout import ModalPage, split_meta_for_modals
 from mom_bot.post_conditions.views import (
+    EditPreferencesView,
     PostConditionsView,
     _selections_to_meta_keyed,
     build_summary_embed,
@@ -653,3 +655,265 @@ def test_selections_to_meta_keyed_omits_empty_meta_labels() -> None:
     assert "Faction & League" not in result
     assert "Role, Affinity, Rarity" not in result
     assert result == {"Effects & Other": {5}}
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView — construction
+# ---------------------------------------------------------------------------
+
+
+def _make_siege_client() -> MagicMock:
+    """Return a minimal fake SiegeWebClient for view tests."""
+    client = MagicMock()
+    client.set_my_preferences = AsyncMock(return_value=[])
+    return client
+
+
+def test_edit_preferences_view_constructs_without_error() -> None:
+    """EditPreferencesView can be instantiated with catalog and preferences."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[1, 3],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    assert view is not None
+
+
+def test_edit_preferences_view_selections_dict_keys_cover_all_catalog_ids() -> None:
+    """selections dict has a key for every catalog condition id."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[1, 3],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    expected_ids = {int(c["id"]) for c in _ALL_CONDITIONS}
+    assert set(view.selections.keys()) == expected_ids
+
+
+def test_edit_preferences_view_selections_true_for_preferred_ids() -> None:
+    """selections[id] is True for each id in preferences."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[1, 3],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    assert view.selections[1] is True
+    assert view.selections[3] is True
+
+
+def test_edit_preferences_view_selections_false_for_unpreferred_ids() -> None:
+    """selections[id] is False for catalog ids not in preferences."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[1, 3],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    assert view.selections[2] is False
+    assert view.selections[4] is False
+    assert view.selections[5] is False
+
+
+def test_edit_preferences_view_selections_all_false_when_no_preferences() -> None:
+    """selections dict is all-False when preferences list is empty."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    assert all(v is False for v in view.selections.values())
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView — button composition
+# ---------------------------------------------------------------------------
+
+
+def _count_buttons_by_type(
+    children: list[Any],
+    label_prefix: str,
+) -> int:
+    """Count discord.ui.Button children whose label starts with label_prefix."""
+    return sum(
+        1
+        for child in children
+        if isinstance(child, discord.ui.Button)
+        and child.label is not None
+        and child.label.startswith(label_prefix)
+    )
+
+
+def test_edit_preferences_view_has_one_edit_button_per_modal_page() -> None:
+    """One EditMetaButton is added per ModalPage from split_meta_for_modals."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    expected_pages = split_meta_for_modals(_ALL_CONDITIONS)
+    edit_button_count = _count_buttons_by_type(view.children, "Edit ")
+    assert edit_button_count == len(expected_pages)
+
+
+def test_edit_preferences_view_edit_button_labels_match_modal_page_labels() -> None:
+    """Each EditMetaButton label is 'Edit <page.label>'."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    expected_pages = split_meta_for_modals(_ALL_CONDITIONS)
+    expected_labels = {f"Edit {page.label}" for page in expected_pages}
+    actual_labels = {
+        child.label
+        for child in view.children
+        if isinstance(child, discord.ui.Button)
+        and child.label is not None
+        and child.label.startswith("Edit ")
+    }
+    assert actual_labels == expected_labels
+
+
+def test_edit_preferences_view_has_exactly_one_dismiss_button() -> None:
+    """EditPreferencesView always has exactly one Dismiss button."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    dismiss_count = _count_buttons_by_type(view.children, "Dismiss")
+    assert dismiss_count == 1
+
+
+def test_edit_preferences_view_empty_catalog_has_no_edit_buttons() -> None:
+    """Empty catalog produces no Edit buttons — just the Dismiss button."""
+    view = EditPreferencesView(
+        catalog=[],
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    edit_button_count = _count_buttons_by_type(view.children, "Edit ")
+    assert edit_button_count == 0
+    dismiss_count = _count_buttons_by_type(view.children, "Dismiss")
+    assert dismiss_count == 1
+
+
+def test_edit_preferences_view_large_catalog_button_count_matches_sub_pages() -> None:
+    """Catalog forcing sub-pagination gives button count = sub-page count."""
+    # Build 12 conditions in the same meta-group → 2 sub-pages.
+    large_catalog: list[dict[str, Any]] = [
+        {
+            "id": i,
+            "description": f"Effect condition {i}.",
+            "condition_type": "effect",
+            "stronghold_level": 1,
+        }
+        for i in range(1, 13)
+    ]
+    view = EditPreferencesView(
+        catalog=large_catalog,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    expected_pages = split_meta_for_modals(large_catalog)
+    assert len(expected_pages) == 2
+    edit_button_count = _count_buttons_by_type(view.children, "Edit ")
+    assert edit_button_count == len(expected_pages)
+
+
+# ---------------------------------------------------------------------------
+# EditPreferencesView — button callbacks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_edit_meta_button_sends_modal_on_click() -> None:
+    """Clicking an EditMetaButton calls interaction.response.send_modal."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[1],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    # Find the first Edit button.
+    edit_button: discord.ui.Button[Any] | None = None
+    for child in view.children:
+        if isinstance(child, discord.ui.Button) and child.label is not None:
+            if child.label.startswith("Edit "):
+                edit_button = child
+                break
+    assert edit_button is not None, "No Edit button found"
+
+    interaction = _make_interaction()
+    interaction.response.send_modal = AsyncMock()
+
+    await edit_button.callback(interaction)  # type: ignore[misc]
+
+    interaction.response.send_modal.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_edit_meta_button_sends_correct_modal_page() -> None:
+    """EditMetaButton sends an EditPreferencesModal whose page matches the button."""
+    from mom_bot.post_conditions.views import EditPreferencesModal
+
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    expected_pages = split_meta_for_modals(_ALL_CONDITIONS)
+    # Check the first Edit button's modal has the matching page.
+    first_page = expected_pages[0]
+    first_edit_label = f"Edit {first_page.label}"
+
+    edit_button: discord.ui.Button[Any] | None = None
+    for child in view.children:
+        if isinstance(child, discord.ui.Button) and child.label == first_edit_label:
+            edit_button = child
+            break
+    assert edit_button is not None, f"No button with label {first_edit_label!r}"
+
+    interaction = _make_interaction()
+    interaction.response.send_modal = AsyncMock()
+
+    await edit_button.callback(interaction)  # type: ignore[misc]
+
+    interaction.response.send_modal.assert_awaited_once()
+    sent_modal = interaction.response.send_modal.call_args[0][0]
+    assert isinstance(sent_modal, EditPreferencesModal)
+    assert sent_modal.page == first_page
+
+
+@pytest.mark.asyncio
+async def test_dismiss_button_edits_message_with_no_view() -> None:
+    """Clicking Dismiss calls interaction.response.edit_message(view=None)."""
+    view = EditPreferencesView(
+        catalog=_ALL_CONDITIONS,
+        preferences=[],
+        siege_client=_make_siege_client(),
+        discord_id="123",
+    )
+    dismiss_button: discord.ui.Button[Any] | None = None
+    for child in view.children:
+        if isinstance(child, discord.ui.Button) and child.label == "Dismiss":
+            dismiss_button = child
+            break
+    assert dismiss_button is not None, "No Dismiss button found"
+
+    interaction = _make_interaction()
+    await dismiss_button.callback(interaction)  # type: ignore[misc]
+
+    interaction.response.edit_message.assert_awaited_once()
+    call_kwargs = interaction.response.edit_message.call_args.kwargs
+    assert call_kwargs.get("view") is None
