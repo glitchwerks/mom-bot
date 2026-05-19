@@ -39,10 +39,17 @@ from typing import Any, cast
 
 import discord
 import discord.ui
+from discord import CheckboxGroupOption
 
+from mom_bot.post_conditions.client import SiegeWebError
 from mom_bot.post_conditions.grouping import group_by_meta
+from mom_bot.post_conditions.modal_layout import ModalPage
 
-__all__ = ["PostConditionsView", "build_summary_embed"]
+__all__ = ["PostConditionsView", "build_summary_embed", "EditPreferencesModal"]
+
+# Discord modal title character limit.
+# Source: .venv/Lib/site-packages/discord/ui/modal.py docstring (L88).
+_MODAL_TITLE_LIMIT = 45
 
 _logger = logging.getLogger(__name__)
 
@@ -502,3 +509,144 @@ set_my_preferences`.
 
         cancel_btn.callback = _cancel  # type: ignore[assignment]
         self.add_item(cancel_btn)
+
+
+class EditPreferencesModal(discord.ui.Modal):
+    """Modal containing one CheckboxGroup for a single ModalPage sub-page.
+
+    Displayed when the user clicks an "Edit ..." button in the
+    :class:`EditPreferencesView` ephemeral message.  On submit, updates the
+    parent view's flat ``selections`` dict for only the IDs in this sub-page,
+    pushes the full merged preference set to siege-web, then refreshes the
+    ephemeral with a re-rendered summary embed.
+
+    If the PUT fails, the update is rolled back to the pre-submit state and an
+    ephemeral error message is sent.  No exception propagates out of
+    :meth:`on_submit`.
+
+    Attributes:
+        group: The :class:`discord.ui.CheckboxGroup` added to this modal.
+        page: The :class:`~mom_bot.post_conditions.modal_layout.ModalPage`
+            this modal covers.
+        parent_view: The owning view (typed as ``Any`` at module load time;
+            ``EditPreferencesView`` is not yet imported to avoid a
+            forward-reference error — see Phase 3).
+        pages: Full ``group_by_meta``-shaped pages list threaded through so
+            ``on_submit`` can call :func:`_selections_to_meta_keyed` and
+            :func:`build_summary_embed`.
+        discord_id: Discord snowflake for the acting user, passed to
+            ``set_my_preferences``.
+    """
+
+    def __init__(
+        self,
+        *,
+        page: ModalPage,
+        parent_view: Any,
+        siege_client: Any,
+        discord_id: int,
+        pages: list[tuple[str, list[dict[str, Any]]]],
+    ) -> None:
+        """Initialise the modal for one ModalPage sub-page.
+
+        Builds a single :class:`discord.ui.CheckboxGroup` from
+        ``page.conditions``, pre-checking boxes for IDs that are currently
+        ``True`` in ``parent_view.selections``.
+
+        Args:
+            page: The sub-page of conditions this modal covers.  Must have
+                at most 10 entries (enforced by :class:`discord.ui.CheckboxGroup`).
+            parent_view: The :class:`EditPreferencesView` that owns this
+                modal.  Must expose a ``selections: dict[int, bool]``
+                attribute.  Typed as ``Any`` here because
+                ``EditPreferencesView`` is defined in Phase 3.
+            siege_client: A
+                :class:`~mom_bot.post_conditions.client.SiegeWebClient`
+                instance used for the PUT call on submit.
+            discord_id: The invoking user's Discord snowflake (numeric int).
+                Forwarded to ``siege_client.set_my_preferences``.
+            pages: The full ``group_by_meta``-shaped
+                ``list[tuple[str, list[dict[str, Any]]]]``.  Required so
+                ``on_submit`` can call :func:`_selections_to_meta_keyed` and
+                :func:`build_summary_embed` for the embed refresh.
+        """
+        title = page.label[:_MODAL_TITLE_LIMIT]
+        super().__init__(title=title)
+
+        self.page = page
+        self.parent_view = parent_view
+        self._siege_client = siege_client
+        self.discord_id = discord_id
+        self.pages = pages
+
+        # Build CheckboxGroup options from the sub-page conditions.
+        options = [
+            CheckboxGroupOption(
+                label=str(cond["description"]),
+                value=str(cond["id"]),
+                default=bool(
+                    parent_view.selections.get(int(cond["id"]), False)
+                ),
+            )
+            for cond in page.conditions
+        ]
+
+        self.group: discord.ui.CheckboxGroup[Any] = discord.ui.CheckboxGroup(
+            options=options,
+            min_values=0,
+            max_values=len(options),
+            required=False,
+        )
+        self.add_item(self.group)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Handle modal submission: update selections, PUT to siege-web, refresh embed.
+
+        Steps:
+            1. Snapshot current selections for rollback on PUT failure.
+            2. Update flat selections for this sub-page's IDs only.
+            3. Push the full preference set to siege-web via
+               ``set_my_preferences``.  On :class:`~.client.SiegeWebError`,
+               roll back selections and send an ephemeral error; then return.
+            4. Re-render the ephemeral summary embed via
+               :func:`build_summary_embed` and call
+               ``interaction.response.edit_message``.
+
+        Args:
+            interaction: The Discord interaction for this modal submission.
+        """
+        # 1. Snapshot for rollback on PUT failure.
+        prior = dict(self.parent_view.selections)
+
+        # 2. Update flat selections for this sub-page only.
+        submitted_ids = {int(v) for v in self.group.values}
+        sub_page_ids = {int(c["id"]) for c in self.page.conditions}
+        for cid in sub_page_ids:
+            self.parent_view.selections[cid] = cid in submitted_ids
+
+        # 3. Push the full preference set to siege-web.
+        try:
+            await self._siege_client.set_my_preferences(
+                self.discord_id,
+                ids=[
+                    cid
+                    for cid, on in self.parent_view.selections.items()
+                    if on
+                ],
+            )
+        except SiegeWebError:
+            self.parent_view.selections = prior
+            await interaction.response.send_message(
+                "Could not save preferences — please try again.",
+                ephemeral=True,
+            )
+            return
+
+        # 4. Refresh the ephemeral message with the converted-shape embed.
+        meta_keyed = _selections_to_meta_keyed(
+            self.parent_view.selections, self.pages
+        )
+        embed = build_summary_embed(self.pages, meta_keyed)
+        await interaction.response.edit_message(
+            embed=embed, view=self.parent_view
+        )

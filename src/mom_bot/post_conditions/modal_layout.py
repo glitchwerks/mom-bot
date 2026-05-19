@@ -16,6 +16,8 @@ from typing import Any, NamedTuple
 from mom_bot.post_conditions.grouping import group_by_meta
 
 # Maximum number of conditions that fit inside a single Discord modal.
+# Enforced by CheckboxGroup.append_option (raises ValueError at 11th option).
+# Source: .venv/Lib/site-packages/discord/ui/checkbox.py:L238-L239.
 _PAGE_SIZE: int = 10
 
 
