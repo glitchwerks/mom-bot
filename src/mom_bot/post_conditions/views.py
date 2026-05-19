@@ -15,10 +15,21 @@ Page layout (per page)::
 
     [◀ Prev]  [Next ▶]               [Commit]  [Cancel]
 
+    ┌──────────────────────────────────────────────┐
+    │ Selected preferences                         │
+    │ **Faction & League**                         │
+    │ ⚔️ Only Barbarian Champions.                 │
+    │ **Role, Affinity, Rarity**                   │
+    │ 🛡️ Only HP Champions.                        │
+    └──────────────────────────────────────────────┘
+
 Selections are accumulated in ``self.selections`` — a
 ``dict[meta_label, set[condition_id]]`` — across page transitions so that
 navigating forward and back preserves all choices.  On Commit the dict is
 flattened into a single list and submitted via a single PUT call.
+
+The :func:`build_summary_embed` helper is exported for unit-testing in
+isolation; callers outside this module should not need it directly.
 """
 
 from __future__ import annotations
@@ -31,7 +42,7 @@ import discord.ui
 
 from mom_bot.post_conditions.grouping import group_by_meta
 
-__all__ = ["PostConditionsView"]
+__all__ = ["PostConditionsView", "build_summary_embed"]
 
 _logger = logging.getLogger(__name__)
 
@@ -45,6 +56,108 @@ _TYPE_EMOJI: dict[str, str] = {
     "effect": "\U0001f52e",
     "other": "\U0001f4cb",
 }
+
+# Discord embed description hard limit.
+_EMBED_MAX_CHARS = 4096
+
+# Truncation suffix template — leave enough headroom for the suffix itself.
+_TRUNCATION_SUFFIX = "… and {n} more"
+
+
+def build_summary_embed(
+    pages: list[tuple[str, list[dict[str, Any]]]],
+    selections: dict[str, set[int]],
+) -> discord.Embed:
+    """Build a discord.Embed summarising every currently-selected preference.
+
+    Items are grouped by meta-label, with a bold heading per non-empty group
+    and one line per selected item (type-emoji prefix + full description).
+    The embed description is capped at 4 096 characters; if the rendered text
+    would exceed that limit, a truncation marker is appended and surplus lines
+    are omitted.
+
+    Args:
+        pages: The view's ``_pages`` list — each element is a
+            ``(meta_label, [condition_dict, ...])`` pair drawn from the full
+            catalog.  Determines both the iteration order and the label used
+            as a heading.
+        selections: The view's ``selections`` dict — maps meta-label to the
+            set of selected condition IDs for that group.
+
+    Returns:
+        A :class:`discord.Embed` ready to pass to
+        ``interaction.response.edit_message(embed=...)``.
+    """
+    embed = discord.Embed(title="Selected preferences", color=discord.Color.blurple())
+
+    # Build a fast lookup: condition_id → (meta_label, description,
+    # condition_type) to avoid O(N²) scans when rendering.
+    id_to_cond: dict[int, dict[str, Any]] = {}
+    for _label, conditions in pages:
+        for cond in conditions:
+            id_to_cond[int(cond["id"])] = cond
+
+    # Collect lines grouped in META_GROUPS order (which is the pages order).
+    lines: list[str] = []
+    total_selected = sum(len(s) for s in selections.values())
+    if total_selected == 0:
+        embed.description = "_None selected yet._"
+        return embed
+
+    for meta_label, conditions in pages:
+        selected_ids = selections.get(meta_label, set())
+        if not selected_ids:
+            continue
+
+        # Build ordered list of matching conditions for this group.
+        group_lines: list[str] = []
+        for cond in conditions:
+            cid = int(cond["id"])
+            if cid in selected_ids:
+                emoji = _TYPE_EMOJI.get(str(cond.get("condition_type", "")), "")
+                prefix = f"{emoji} " if emoji else ""
+                group_lines.append(f"{prefix}{cond['description']}")
+
+        if not group_lines:
+            continue
+
+        lines.append(f"**{meta_label}**")
+        lines.extend(group_lines)
+
+    # Join into a single string, then enforce the 4 096-char limit.
+    description = "\n".join(lines)
+    if len(description) <= _EMBED_MAX_CHARS:
+        embed.description = description
+        return embed
+
+    # Truncate: drop lines from the end until we fit, then add suffix.
+    # We count remaining omitted items for the "… and N more" marker.
+    # Because we drop whole lines (some are headings, some are items), we
+    # compute how many *item* lines (non-bold) were dropped.
+    kept: list[str] = []
+    dropped_items = 0
+    # Pre-count total item lines (non-heading).
+    total_item_lines = sum(1 for ln in lines if not ln.startswith("**"))
+
+    for ln in lines:
+        tentative = kept + [ln]
+        # Reserve space for the suffix.
+        suffix_len = len(_TRUNCATION_SUFFIX.format(n=total_item_lines))
+        if len("\n".join(tentative)) + 1 + suffix_len > _EMBED_MAX_CHARS:
+            break
+        kept.append(ln)
+
+    # Count how many item lines were dropped.
+    kept_items = sum(1 for ln in kept if not ln.startswith("**"))
+    dropped_items = total_item_lines - kept_items
+
+    # Remove any trailing heading that has no items under it.
+    while kept and kept[-1].startswith("**"):
+        kept.pop()
+
+    suffix = _TRUNCATION_SUFFIX.format(n=dropped_items)
+    embed.description = "\n".join(kept) + "\n" + suffix
+    return embed
 
 
 def _build_select(
@@ -96,6 +209,11 @@ class PostConditionsView(discord.ui.View):
     :class:`discord.ui.Select` with ``min_values=0`` and
     ``max_values=len(group)``.  Navigation buttons allow moving between
     pages; a Commit button submits the final set via PUT.
+
+    A :class:`discord.Embed` is rendered alongside the view on every
+    interaction (Select toggle, Prev, Next) to display the full text of
+    every currently-selected preference, grouped by meta-label.  This
+    works around Discord's truncation of collapsed Select chips.
 
     Attributes:
         current_page: Zero-based index of the currently displayed page.
@@ -166,6 +284,18 @@ class PostConditionsView(discord.ui.View):
             f" — {page_label}\nSelected: {total_selected}"
         )
 
+    def build_embed(self) -> discord.Embed:
+        """Build the live selection-summary embed for the current state.
+
+        Delegates to :func:`build_summary_embed` with the view's current
+        ``_pages`` catalog and ``selections`` state.
+
+        Returns:
+            A :class:`discord.Embed` listing every selected preference,
+            grouped by meta-label.
+        """
+        return build_summary_embed(self._pages, self.selections)
+
     # ------------------------------------------------------------------
     # Navigation
     # ------------------------------------------------------------------
@@ -179,7 +309,11 @@ class PostConditionsView(discord.ui.View):
         if self.current_page < self.page_count - 1:
             self.current_page += 1
         self._rebuild_items()
-        await interaction.response.edit_message(content=self.build_header(), view=self)
+        await interaction.response.edit_message(
+            content=self.build_header(),
+            embed=self.build_embed(),
+            view=self,
+        )
 
     async def go_prev(self, interaction: discord.Interaction) -> None:
         """Return to the previous page, preserving current page selections.
@@ -190,7 +324,11 @@ class PostConditionsView(discord.ui.View):
         if self.current_page > 0:
             self.current_page -= 1
         self._rebuild_items()
-        await interaction.response.edit_message(content=self.build_header(), view=self)
+        await interaction.response.edit_message(
+            content=self.build_header(),
+            embed=self.build_embed(),
+            view=self,
+        )
 
     # ------------------------------------------------------------------
     # Commit / Cancel
@@ -267,7 +405,11 @@ set_my_preferences`.
             data = cast(dict[str, Any], sel_interaction.data or {})
             values: list[str] = list(data.get("values", []))
             self.selections[_label] = {int(v) for v in values}
-            await sel_interaction.response.defer()
+            await sel_interaction.response.edit_message(
+                content=self.build_header(),
+                embed=self.build_embed(),
+                view=self,
+            )
 
         select.callback = _on_select  # type: ignore[assignment]
         self.add_item(select)

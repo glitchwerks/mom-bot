@@ -1,7 +1,8 @@
 """Tests for mom_bot.post_conditions.views.
 
 Covers: page navigation preserving selections, pre-population from initial
-GET state, Commit flattening, Cancel discarding, using a fake interaction.
+GET state, Commit flattening, Cancel discarding, using a fake interaction,
+and the live-updating selection-summary embed.
 """
 
 from __future__ import annotations
@@ -12,7 +13,10 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from mom_bot.post_conditions.views import PostConditionsView
+from mom_bot.post_conditions.views import (
+    PostConditionsView,
+    build_summary_embed,
+)
 
 # ---------------------------------------------------------------------------
 # Sample data
@@ -419,3 +423,183 @@ def test_header_updates_on_page_change() -> None:
     header = view.build_header()
     assert "Page 2 of 3" in header
     assert "Role, Affinity, Rarity" in header
+
+
+# ---------------------------------------------------------------------------
+# build_summary_embed — unit tests
+# ---------------------------------------------------------------------------
+
+# A pages structure mirroring what PostConditionsView._pages produces.
+_PAGES: list[tuple[str, list[dict[str, Any]]]] = [
+    (
+        "Faction & League",
+        [
+            {
+                "id": 1,
+                "description": "Only Barbarian Champions.",
+                "condition_type": "faction",
+            },
+            {
+                "id": 2,
+                "description": "Only Telerian League Champions.",
+                "condition_type": "league",
+            },
+        ],
+    ),
+    (
+        "Role, Affinity, Rarity",
+        [
+            {
+                "id": 3,
+                "description": "Only HP Champions.",
+                "condition_type": "role",
+            },
+            {
+                "id": 4,
+                "description": "Only Void Champions.",
+                "condition_type": "affinity",
+            },
+        ],
+    ),
+    (
+        "Effects & Other",
+        [
+            {
+                "id": 5,
+                "description": "Immune to Turn Meter reduction.",
+                "condition_type": "effect",
+            },
+        ],
+    ),
+]
+
+
+def test_build_summary_embed_empty() -> None:
+    """No selections → embed has '_None selected yet.' description."""
+    selections: dict[str, set[int]] = {
+        "Faction & League": set(),
+        "Role, Affinity, Rarity": set(),
+        "Effects & Other": set(),
+    }
+    embed = build_summary_embed(_PAGES, selections)
+    assert isinstance(embed, discord.Embed)
+    assert embed.description is not None
+    assert "_None selected yet._" in embed.description
+
+
+def test_build_summary_embed_single_meta() -> None:
+    """All selections in one meta-group → single bold heading with items listed."""
+    selections: dict[str, set[int]] = {
+        "Faction & League": {1, 2},
+        "Role, Affinity, Rarity": set(),
+        "Effects & Other": set(),
+    }
+    embed = build_summary_embed(_PAGES, selections)
+    assert embed.description is not None
+    # Bold heading for the group should appear.
+    assert "**Faction & League**" in embed.description
+    # Both descriptions should be present.
+    assert "Only Barbarian Champions." in embed.description
+    assert "Only Telerian League Champions." in embed.description
+    # The group with no selections should not add a heading.
+    assert "**Role, Affinity, Rarity**" not in embed.description
+    assert "**Effects & Other**" not in embed.description
+
+
+def test_build_summary_embed_multi_meta() -> None:
+    """Selections in two meta-groups → both bold headings with items listed."""
+    selections: dict[str, set[int]] = {
+        "Faction & League": {1},
+        "Role, Affinity, Rarity": {3},
+        "Effects & Other": set(),
+    }
+    embed = build_summary_embed(_PAGES, selections)
+    assert embed.description is not None
+    assert "**Faction & League**" in embed.description
+    assert "Only Barbarian Champions." in embed.description
+    assert "**Role, Affinity, Rarity**" in embed.description
+    assert "Only HP Champions." in embed.description
+    # Empty group omitted.
+    assert "**Effects & Other**" not in embed.description
+
+
+def test_build_summary_embed_overflow_truncates() -> None:
+    """When many items are selected, description stays within 4096 chars."""
+    # Build a large fake pages/selections structure.
+    big_pages: list[tuple[str, list[dict[str, Any]]]] = [
+        (
+            "Faction & League",
+            [
+                {
+                    "id": i,
+                    "description": "A" * 90,  # near max label length
+                    "condition_type": "faction",
+                }
+                for i in range(1, 101)  # 100 items
+            ],
+        ),
+    ]
+    selections: dict[str, set[int]] = {"Faction & League": set(range(1, 101))}
+    embed = build_summary_embed(big_pages, selections)
+    assert embed.description is not None
+    assert len(embed.description) <= 4096
+    # Truncation marker must appear somewhere in the description.
+    assert "more" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_on_select_rerenders_embed() -> None:
+    """Toggling the Select re-renders the embed alongside the View."""
+    client = MagicMock()
+    view = PostConditionsView(
+        catalog=_ALL_CONDITIONS,
+        initial_prefs=[],
+        discord_id="123",
+        siege_client=client,
+    )
+    # Grab the Select item that was added during _rebuild_items().
+    select_item: discord.ui.Select[Any] | None = None
+    for item in view.children:
+        if isinstance(item, discord.ui.Select):
+            select_item = item
+            break
+    assert select_item is not None, "No Select found in view items"
+
+    interaction = _make_select_interaction(["1", "2"])
+    # The callback must be awaitable and call edit_message with embed= kwarg.
+    await select_item.callback(interaction)  # type: ignore[misc]
+
+    interaction.response.edit_message.assert_awaited_once()
+    call_kwargs = interaction.response.edit_message.call_args.kwargs
+    assert "embed" in call_kwargs, "edit_message was not called with embed= kwarg"
+    assert "view" in call_kwargs, "edit_message was not called with view= kwarg"
+    assert isinstance(call_kwargs["embed"], discord.Embed)
+
+
+@pytest.mark.asyncio
+async def test_prev_next_preserves_embed_selections() -> None:
+    """Page navigation preserves cross-page selections in the embed."""
+    client = MagicMock()
+    view = PostConditionsView(
+        catalog=_ALL_CONDITIONS,
+        initial_prefs=[],
+        discord_id="123",
+        siege_client=client,
+    )
+    # Pre-select id=1 on page 0 (Faction & League).
+    view.selections["Faction & League"] = {1}
+
+    interaction = _make_interaction()
+
+    # Navigate to page 1.
+    await view.go_next(interaction)
+
+    # The edit_message call should have included an embed.
+    call_kwargs = interaction.response.edit_message.call_args.kwargs
+    assert "embed" in call_kwargs, "go_next did not pass embed= to edit_message"
+    embed = call_kwargs["embed"]
+    assert isinstance(embed, discord.Embed)
+    # Even though we navigated away from page 0, the page-0 selection
+    # should still appear in the embed.
+    assert embed.description is not None
+    assert "Only Barbarian Champions." in embed.description
