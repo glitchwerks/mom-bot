@@ -10,8 +10,14 @@ Security contract
 -----------------
 - The bot token is stored in a private attribute and never appears in log
   output, exception messages, or response bodies sent to Discord.
-- A 429 (rate-limit) response triggers a single retry with a short backoff;
-  a second consecutive 429 raises :class:`SiegeWebRateLimitError`.
+- A 429 (rate-limit) response triggers up to 3 automatic retries with
+  exponential backoff (1 s, 2 s, 4 s).  If a ``Retry-After`` header is
+  present and its value is ≤ 30 s, that value is used instead for that
+  attempt.  After 4 consecutive 429 responses,
+  :class:`SiegeWebRateLimitError` is raised.
+- The post-condition catalog is cached in-process for 10 minutes per
+  ``stronghold_level`` key; a single ``asyncio.Lock`` serialises cold-cache
+  fetches to prevent thundering-herd refetches.
 
 Usage
 -----
@@ -40,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import aiohttp
@@ -54,8 +61,46 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-# Backoff before retrying a 429 response (seconds).
-_RETRY_BACKOFF = 1.0
+# Exponential backoff schedule for 429 retries (seconds per attempt index).
+# Three retries → four total attempts; worst-case wait is
+# sum(_RETRY_BACKOFF_SCHEDULE) seconds (currently 7s).
+_RETRY_BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+# Maximum number of seconds we will honour from a ``Retry-After`` header.
+# May exceed the exponential schedule ceiling; the header value is trusted
+# when within this cap.  Values above the cap fall through to the exponential
+# schedule for that attempt.
+_RETRY_AFTER_MAX = 30.0
+
+# TTL for the in-process catalog cache (seconds).
+_CATALOG_CACHE_TTL = 600.0
+
+
+def _parse_retry_after(headers: Any) -> float | None:
+    """Parse the ``Retry-After`` header value as a sleep duration.
+
+    Returns the header value as a positive float if it is present, parses
+    as a number, and is within :data:`_RETRY_AFTER_MAX`.  Returns ``None``
+    in all other cases (header absent, unparseable, or above the cap), so
+    callers can fall through to the exponential schedule.
+
+    Args:
+        headers: A mapping (or dict-like object) of HTTP response headers.
+
+    Returns:
+        A positive float seconds value from the header, or ``None`` if the
+        header is absent, unparseable, or exceeds ``_RETRY_AFTER_MAX``.
+    """
+    raw = headers.get("Retry-After") if headers else None
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (ValueError, TypeError):
+        return None
+    if value <= 0 or value > _RETRY_AFTER_MAX:
+        return None
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +131,7 @@ class SiegeWebNotFoundError(SiegeWebError):
 
 
 class SiegeWebRateLimitError(SiegeWebError):
-    """Raised when a 429 persists after the single automatic retry."""
+    """Raised when a 429 persists after all automatic retries are exhausted."""
 
 
 class SiegeWebValidationError(SiegeWebError):
@@ -136,6 +181,10 @@ class SiegeWebClient:
         self.base_url = base_url.rstrip("/")
         self._token = token
         self._session: aiohttp.ClientSession | None = None
+        # Catalog cache: maps stronghold_level (int | None) → (timestamp, payload).
+        # Guarded by _catalog_cache_lock to prevent thundering-herd refetches.
+        self._catalog_cache: dict[int | None, tuple[float, list[dict[str, Any]]]] = {}
+        self._catalog_cache_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Async context manager support
@@ -236,61 +285,86 @@ class SiegeWebClient:
         self,
         method: str,
         url: str,
-        headers: dict[str, str],
+        headers: dict[str, str] | None = None,
         json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Perform a single HTTP request, retrying once on 429.
+        """Perform an HTTP request with exponential-backoff retry on 429.
 
-        Issues the request using the shared session.  On a 429 response,
-        waits :data:`_RETRY_BACKOFF` seconds and tries once more.  A second
-        consecutive 429 raises :class:`SiegeWebRateLimitError`.  Any other
-        non-2xx status delegates to :meth:`_raise_for_status`.
+        Issues up to ``len(_RETRY_BACKOFF_SCHEDULE) + 1`` total attempts.
+        On each 429 response the helper reads the ``Retry-After`` header:
+        if present, parses as a positive number, and is within
+        :data:`_RETRY_AFTER_MAX`, that exact value is used as the sleep
+        duration.  Otherwise the client sleeps
+        ``_RETRY_BACKOFF_SCHEDULE[attempt]`` (exponential: 1, 2, 4 seconds).
+        After the final 429 raises :class:`SiegeWebRateLimitError`.
+
+        The ``headers`` and ``params`` kwargs are omitted from the underlying
+        aiohttp call when ``None`` — aiohttp tolerates ``None`` but the
+        omission keeps the call-kwargs shape predictable for tests and avoids
+        forwarding ``{"headers": None}`` to the wire layer.
 
         Args:
             method: HTTP verb, one of ``"get"`` or ``"put"``.
             url: Full request URL including scheme and path.
-            headers: HTTP headers to include in the request.
+            headers: HTTP headers to include in the request, or ``None``
+                for unauthenticated calls (e.g. the catalog endpoint).
             json: Optional request body as a dict (serialised to JSON).
+            params: Optional URL query parameters forwarded to aiohttp.
 
         Returns:
             The parsed JSON response body as a list of dicts.
 
         Raises:
-            SiegeWebRateLimitError: If 429 is received on both attempts.
+            SiegeWebRateLimitError: After the maximum number of consecutive
+                429 responses.
             SiegeWebAuthError: On 401.
             SiegeWebNotFoundError: On 404.
             SiegeWebValidationError: On 422.
         """
         session = await self._get_session()
         request = getattr(session, method)
-        kwargs: dict[str, Any] = {"headers": headers}
+        kwargs: dict[str, Any] = {}
+        if headers is not None:
+            kwargs["headers"] = headers
+        if params is not None:
+            kwargs["params"] = params
         if json is not None:
             kwargs["json"] = json
 
-        async with request(url, **kwargs) as resp:
-            status = resp.status
-            if status != 429:
-                self._raise_for_status(status)
-                data: list[dict[str, Any]] = await resp.json()
-                return data
+        max_attempts = len(_RETRY_BACKOFF_SCHEDULE) + 1  # 4 total
+        for attempt in range(max_attempts):
+            async with request(url, **kwargs) as resp:
+                status = resp.status
+                if status != 429:
+                    self._raise_for_status(status)
+                    data: list[dict[str, Any]] = await resp.json()
+                    return data
+                # 429 — prepare to sleep before next attempt (if any).
+                retry_after = _parse_retry_after(resp.headers)
 
-        # First context has fully exited; now log and backoff before retry.
-        _logger.warning(
-            "siege-web returned 429 on %s %s; retrying after backoff.",
-            method.upper(),
-            url,
-        )
-        await asyncio.sleep(_RETRY_BACKOFF)
-
-        async with request(url, **kwargs) as retry_resp:
-            if retry_resp.status == 429:
+            if attempt >= max_attempts - 1:
+                # All attempts exhausted.
                 raise SiegeWebRateLimitError(
                     f"siege-web rate-limited {method.upper()} {url} "
-                    "on both initial attempt and retry."
+                    f"after {max_attempts} attempts."
                 )
-            self._raise_for_status(retry_resp.status)
-            result: list[dict[str, Any]] = await retry_resp.json()
-            return result
+
+            sleep_for = retry_after if retry_after is not None else _RETRY_BACKOFF_SCHEDULE[attempt]
+            _logger.warning(
+                "siege-web returned 429 on %s %s (attempt %d/%d); sleeping %.1fs before retry.",
+                method.upper(),
+                url,
+                attempt + 1,
+                max_attempts,
+                sleep_for,
+            )
+            await asyncio.sleep(sleep_for)
+
+        # Unreachable — loop always raises or returns inside.
+        raise SiegeWebRateLimitError(  # pragma: no cover
+            f"siege-web rate-limited {method.upper()} {url}."
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -300,15 +374,29 @@ class SiegeWebClient:
         self,
         stronghold_level: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Fetch the full post-condition catalog from the open reference endpoint.
+        """Fetch the post-condition catalog, returning a cached copy when fresh.
 
         Calls ``GET /api/reference/post-conditions`` without authentication.
         An optional ``stronghold_level`` query parameter filters the results.
-        This endpoint does not use the auth headers and does not retry on 429.
+        Results are cached per ``stronghold_level`` key for
+        :data:`_CATALOG_CACHE_TTL` seconds (10 minutes).  A single
+        ``asyncio.Lock`` serialises concurrent cache-miss fetches to avoid
+        thundering-herd refetches.
+
+        Cache staleness: at worst, newly added or edited catalog entries may
+        not appear for up to 10 minutes after a siege-web admin change.
+        Restarting the bot or waiting for TTL expiry are the available escape
+        hatches.
+
+        Cache size is bounded by the number of distinct ``stronghold_level``
+        values queried (in practice a small, finite set — typically < 20).
+        No LRU eviction is performed; entries are overwritten in-place when
+        refreshed.
 
         Args:
             stronghold_level: If provided, passed as ``?stronghold_level=N``
-                to the catalog endpoint.
+                to the catalog endpoint.  Cache is keyed by this value;
+                ``None`` and each integer level are cached independently.
 
         Returns:
             A list of PostConditionResponse dicts.
@@ -320,14 +408,43 @@ class SiegeWebClient:
             SiegeWebValidationError: On 422.
         """
         url = f"{self.base_url}/api/reference/post-conditions"
-        params: dict[str, int] = {}
-        if stronghold_level is not None:
-            params["stronghold_level"] = stronghold_level
+        params: dict[str, Any] | None = (
+            {"stronghold_level": stronghold_level} if stronghold_level is not None else None
+        )
 
-        session = await self._get_session()
-        async with session.get(url, params=params) as resp:
-            self._raise_for_status(resp.status)
-            result: list[dict[str, Any]] = await resp.json()
+        # Fast path: check the cache without acquiring the lock.  This avoids
+        # serialising concurrent callers for different stronghold_level keys
+        # when their entries are already warm.
+        cached = self._catalog_cache.get(stronghold_level)
+        if cached is not None:
+            ts, payload = cached
+            if time.monotonic() - ts < _CATALOG_CACHE_TTL:
+                _logger.debug(
+                    "catalog cache HIT stronghold_level=%s",
+                    stronghold_level,
+                )
+                return payload
+
+        # Slow path: cache miss or stale entry — acquire the lock, then
+        # re-check (another coroutine may have populated the entry while we
+        # were waiting).
+        async with self._catalog_cache_lock:
+            cached = self._catalog_cache.get(stronghold_level)
+            if cached is not None:
+                ts, payload = cached
+                if time.monotonic() - ts < _CATALOG_CACHE_TTL:
+                    _logger.debug(
+                        "catalog cache HIT (after lock) stronghold_level=%s",
+                        stronghold_level,
+                    )
+                    return payload
+
+            _logger.info(
+                "siege-web catalog cache miss " "(stronghold_level=%s); fetching.",
+                stronghold_level,
+            )
+            result = await self._call_with_retry("get", url, headers=None, params=params)
+            self._catalog_cache[stronghold_level] = (time.monotonic(), result)
             return result
 
     async def get_my_preferences(

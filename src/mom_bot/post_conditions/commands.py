@@ -103,22 +103,25 @@ async def post_conditions_catalog(
 ) -> None:
     """Handle ``/post-conditions`` — show the full post-condition catalog.
 
-    Calls the open catalog endpoint (no auth), groups by meta-category, and
-    sends an ephemeral reply.
+    Defers the interaction immediately to satisfy Discord's 3-second deadline,
+    then calls the open catalog endpoint (no auth), groups by meta-category,
+    and sends an ephemeral followup reply.
 
     Args:
         interaction: The Discord slash-command interaction.
         siege_client: The siege-web HTTP client instance.
     """
+    await interaction.response.defer(ephemeral=True)
+
     try:
         catalog = await siege_client.list_catalog()
     except Exception:
         _logger.exception("Failed to fetch post-condition catalog from siege-web.")
-        await interaction.response.send_message(_OPS_ERROR_MSG, ephemeral=True)
+        await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
     content = _format_catalog(catalog)
-    await interaction.response.send_message(content, ephemeral=True)
+    await interaction.followup.send(content, ephemeral=True)
 
 
 async def post_conditions_get(
@@ -128,9 +131,10 @@ async def post_conditions_get(
 ) -> None:
     """Handle ``/post-conditions-get`` — show the invoking user's preferences.
 
-    Reads the invoking user's Discord ID from ``interaction.user.id`` and
-    fetches their current preferences.  Surfaces a link-your-account message
-    on 404 and a generic ops-error message on 401.  No target-user parameter.
+    Defers the interaction immediately to satisfy Discord's 3-second deadline,
+    then fetches the invoking user's current preferences.  Surfaces a
+    link-your-account message on 404 and a generic ops-error message on 401.
+    No target-user parameter.
 
     Args:
         interaction: The Discord slash-command interaction.
@@ -138,35 +142,37 @@ async def post_conditions_get(
     """
     discord_id = str(interaction.user.id)
 
+    await interaction.response.defer(ephemeral=True)
+
     try:
         prefs = await siege_client.get_my_preferences(discord_id=discord_id)
     except SiegeWebNotFoundError:
-        await interaction.response.send_message(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
+        await interaction.followup.send(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
         return
     except SiegeWebAuthError:
         _logger.error(
             "Auth error fetching preferences for discord_id=%s",
             discord_id,
         )
-        await interaction.response.send_message(_OPS_ERROR_MSG, ephemeral=True)
+        await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
     except Exception:
         _logger.exception(
             "Unexpected error fetching preferences for discord_id=%s",
             discord_id,
         )
-        await interaction.response.send_message(_OPS_ERROR_MSG, ephemeral=True)
+        await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
     if not prefs:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "You have no post-condition preferences set.",
             ephemeral=True,
         )
         return
 
     content = _format_catalog(prefs)
-    await interaction.response.send_message(content, ephemeral=True)
+    await interaction.followup.send(content, ephemeral=True)
 
 
 async def post_conditions_set(
@@ -176,10 +182,15 @@ async def post_conditions_set(
 ) -> None:
     """Handle ``/post-conditions-set`` — open the paginated preference editor.
 
+    Defers the interaction immediately to satisfy Discord's 3-second deadline.
     Fetches both the full catalog and the user's current preferences, then
     opens a :class:`~mom_bot.post_conditions.views.PostConditionsView`
     pre-populated with the user's existing selections.  404 on the initial
     GET surfaces a link-your-account message without opening the view.
+
+    Note: SiegeWebNotFoundError from list_catalog would surface here as
+    "account not registered" — misleading but unreachable in practice
+    (catalog endpoint never 404s for valid base_url).
 
     Args:
         interaction: The Discord slash-command interaction.
@@ -187,27 +198,29 @@ async def post_conditions_set(
     """
     discord_id = str(interaction.user.id)
 
+    await interaction.response.defer(ephemeral=True)
+
     try:
         catalog, prefs = (
             await siege_client.list_catalog(),
             await siege_client.get_my_preferences(discord_id=discord_id),
         )
     except SiegeWebNotFoundError:
-        await interaction.response.send_message(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
+        await interaction.followup.send(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
         return
     except SiegeWebAuthError:
         _logger.error(
             "Auth error opening set-preferences view for discord_id=%s",
             discord_id,
         )
-        await interaction.response.send_message(_OPS_ERROR_MSG, ephemeral=True)
+        await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
     except Exception:
         _logger.exception(
             "Unexpected error opening set-preferences view for discord_id=%s",
             discord_id,
         )
-        await interaction.response.send_message(_OPS_ERROR_MSG, ephemeral=True)
+        await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
     view = PostConditionsView(
@@ -217,7 +230,7 @@ async def post_conditions_set(
         siege_client=siege_client,
     )
     header = view.build_header()
-    await interaction.response.send_message(content=header, view=view, ephemeral=True)
+    await interaction.followup.send(content=header, view=view, ephemeral=True)
 
 
 # ---------------------------------------------------------------------------
