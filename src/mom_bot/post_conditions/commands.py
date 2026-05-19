@@ -40,7 +40,7 @@ from mom_bot.post_conditions.client import (
     SiegeWebNotFoundError,
 )
 from mom_bot.post_conditions.grouping import group_by_meta
-from mom_bot.post_conditions.views import PostConditionsView
+from mom_bot.post_conditions.views import EditPreferencesView
 
 __all__ = [
     "post_conditions_catalog",
@@ -180,11 +180,11 @@ async def post_conditions_set(
     *,
     siege_client: SiegeWebClient,
 ) -> None:
-    """Handle ``/post-conditions-set`` — open the paginated preference editor.
+    """Handle ``/post-conditions-set`` — open the checkbox preference editor.
 
     Defers the interaction immediately to satisfy Discord's 3-second deadline.
     Fetches both the full catalog and the user's current preferences, then
-    opens a :class:`~mom_bot.post_conditions.views.PostConditionsView`
+    opens an :class:`~mom_bot.post_conditions.views.EditPreferencesView`
     pre-populated with the user's existing selections.  404 on the initial
     GET surfaces a link-your-account message without opening the view.
 
@@ -223,16 +223,16 @@ async def post_conditions_set(
         await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
-    view = PostConditionsView(
+    # EditPreferencesView expects preference IDs (list[int]), not full dicts.
+    pref_ids = [int(p["id"]) for p in prefs]
+    view = EditPreferencesView(
         catalog=catalog,
-        initial_prefs=prefs,
+        preferences=pref_ids,
         discord_id=discord_id,
         siege_client=siege_client,
     )
-    header = view.build_header()
     await interaction.followup.send(
-        content=header,
-        embed=view.build_embed(),
+        embed=view.initial_embed(),
         view=view,
         ephemeral=True,
     )
