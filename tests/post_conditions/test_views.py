@@ -129,6 +129,26 @@ def test_build_summary_embed_multi_meta() -> None:
     assert "**Effects & Other**" not in embed.description
 
 
+def test_summary_embed_inserts_blank_line_between_meta_groups() -> None:
+    """Selections spanning ≥2 groups have a blank line before each non-first group.
+
+    The description must contain the pattern ``<last_item>\\n\\n**<next_label>**``
+    so that Discord renders distinct visual sections between meta-groups.
+    """
+    selections: dict[str, set[int]] = {
+        "Faction & League": {1, 2},
+        "Role, Affinity, Rarity": {3},
+        "Effects & Other": set(),
+    }
+    embed = build_summary_embed(_PAGES, selections)
+    assert embed.description is not None
+    # A blank line must appear before the second meta-group heading.
+    assert "\n\n**Role, Affinity, Rarity**" in embed.description
+    # There must be no trailing blank line at the very end of the description.
+    assert not embed.description.endswith("\n\n")
+    assert not embed.description.endswith("\n")
+
+
 def test_build_summary_embed_overflow_truncates() -> None:
     """When many items are selected, description stays within 4096 chars."""
     # Build a large fake pages/selections structure.

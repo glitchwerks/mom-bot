@@ -106,6 +106,9 @@ def build_summary_embed(
         if not group_lines:
             continue
 
+        if lines:  # not the first emitted group — add blank separator
+            lines.append("")
+
         lines.append(f"**{meta_label}**")
         lines.extend(group_lines)
 
