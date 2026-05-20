@@ -3,7 +3,12 @@
 Provides :class:`EditPreferencesView` — a persistent ephemeral-message view
 with one "Edit …" button per :class:`~.modal_layout.ModalPage` sub-page.
 Each button opens an :class:`EditPreferencesModal` containing a
-:class:`discord.ui.CheckboxGroup` for that sub-page's conditions.
+:class:`discord.ui.Label` (type 18) wrapping a multi-select
+:class:`discord.ui.Select` (string-select, type 3).
+
+Using ``Label`` as the top-level modal child avoids the Discord API 400 that
+results from placing ``CheckboxGroup`` (type 22) directly in a modal payload;
+Discord's modal endpoint only accepts types 1, 10, and 18 at the top level.
 
 The :func:`build_summary_embed` helper is exported for unit-testing in
 isolation; callers outside this module should not need it directly.
@@ -16,7 +21,6 @@ from typing import Any
 
 import discord
 import discord.ui
-from discord import CheckboxGroupOption
 
 from mom_bot.post_conditions.client import SiegeWebError
 from mom_bot.post_conditions.grouping import group_by_meta
@@ -191,7 +195,7 @@ def build_summary_embed(
 
 
 class EditPreferencesModal(discord.ui.Modal):
-    """Modal containing one CheckboxGroup for a single ModalPage sub-page.
+    """Modal containing a Label-wrapped StringSelect for a single ModalPage sub-page.
 
     Displayed when the user clicks an "Edit ..." button in the
     :class:`EditPreferencesView` ephemeral message.  On submit, updates the
@@ -199,12 +203,18 @@ class EditPreferencesModal(discord.ui.Modal):
     pushes the full merged preference set to siege-web, then refreshes the
     ephemeral with a re-rendered summary embed.
 
+    Uses :class:`discord.ui.Label` (type 18) as the top-level modal child,
+    wrapping a multi-select :class:`discord.ui.Select` (string-select, type 3).
+    ``CheckboxGroup`` (type 22) is rejected by Discord's modal endpoint at the
+    top level; ``Label`` is accepted.
+
     If the PUT fails, the update is rolled back to the pre-submit state and an
     ephemeral error message is sent.  No exception propagates out of
     :meth:`on_submit`.
 
     Attributes:
-        group: The :class:`discord.ui.CheckboxGroup` added to this modal.
+        select: The :class:`discord.ui.Select` wrapped inside the modal's
+            :class:`discord.ui.Label`.
         page: The :class:`~mom_bot.post_conditions.modal_layout.ModalPage`
             this modal covers.
         parent_view: The owning :class:`EditPreferencesView`.
@@ -226,13 +236,18 @@ class EditPreferencesModal(discord.ui.Modal):
     ) -> None:
         """Initialise the modal for one ModalPage sub-page.
 
-        Builds a single :class:`discord.ui.CheckboxGroup` from
-        ``page.conditions``, pre-checking boxes for IDs that are currently
-        ``True`` in ``parent_view.selections``.
+        Builds a :class:`discord.ui.Select` (string-select) from
+        ``page.conditions``, pre-selecting options for IDs that are currently
+        ``True`` in ``parent_view.selections``, then wraps it in a
+        :class:`discord.ui.Label` so Discord's modal endpoint accepts the
+        payload (type 18 is allowed at top level; type 22 is not).
+
+        Option labels are truncated to 100 characters per Discord's
+        ``SelectOption.label`` cap.
 
         Args:
             page: The sub-page of conditions this modal covers.  Must have
-                at most 10 entries (enforced by :class:`discord.ui.CheckboxGroup`).
+                at most 25 entries (Discord's Select option limit).
             parent_view: The :class:`EditPreferencesView` that owns this
                 modal.  Must expose a ``selections: dict[int, bool]``
                 attribute.
@@ -255,23 +270,36 @@ class EditPreferencesModal(discord.ui.Modal):
         self.discord_id = discord_id
         self.pages = pages
 
-        # Build CheckboxGroup options from the sub-page conditions.
+        # Discord caps SelectOption.label at 100 characters.
+        # Source: https://docs.discord.com/developers/components/reference
+        _SELECT_OPTION_LABEL_LIMIT = 100
+
+        # Build Select options from the sub-page conditions.
         options = [
-            CheckboxGroupOption(
-                label=str(cond["description"]),
+            discord.SelectOption(
+                label=str(cond["description"])[:_SELECT_OPTION_LABEL_LIMIT],
                 value=str(cond["id"]),
                 default=bool(parent_view.selections.get(int(cond["id"]), False)),
             )
             for cond in page.conditions
         ]
 
-        self.group: discord.ui.CheckboxGroup[Any] = discord.ui.CheckboxGroup(
-            options=options,
+        self.select: discord.ui.Select[Any] = discord.ui.Select(
+            placeholder="Select preferences …",
             min_values=0,
             max_values=len(options),
-            required=False,
+            options=options,
+            custom_id=f"post_conditions_select_{page.label}",
         )
-        self.add_item(self.group)
+
+        # Wrap in Label (type 18) so the modal payload's top-level component
+        # type is accepted by Discord's modal endpoint (types 1, 10, 18 only).
+        self.add_item(
+            discord.ui.Label(
+                text=page.label[:_MODAL_TITLE_LIMIT],
+                component=self.select,
+            )
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         """Handle modal submission: update selections, PUT to siege-web, refresh embed.
@@ -293,7 +321,7 @@ class EditPreferencesModal(discord.ui.Modal):
         prior = dict(self.parent_view.selections)
 
         # 2. Update flat selections for this sub-page only.
-        submitted_ids = {int(v) for v in self.group.values}
+        submitted_ids = {int(v) for v in self.select.values}
         sub_page_ids = {int(c["id"]) for c in self.page.conditions}
         for cid in sub_page_ids:
             self.parent_view.selections[cid] = cid in submitted_ids
