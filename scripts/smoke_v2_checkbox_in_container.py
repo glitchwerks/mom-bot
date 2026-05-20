@@ -50,11 +50,34 @@ the Phase 0 paper-trail gate before opening any Phase 1 PR.
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import discord
 from discord import ButtonStyle, app_commands
 
+import mom_bot
 from mom_bot.config import load_secret
+
+# ---------------------------------------------------------------------------
+# Tripwire — guard against running with the wrong .venv's Python.
+#
+# If the resolved mom_bot package is NOT inside this script's repo tree, the
+# caller is using a different checkout's interpreter (e.g. the parent
+# worktree's .venv/Scripts/python.exe).  Raise loudly rather than silently
+# smoke-testing the wrong source.
+# ---------------------------------------------------------------------------
+
+_SCRIPT_PATH = pathlib.Path(__file__).resolve()
+_MOM_BOT_PATH = pathlib.Path(mom_bot.__file__).resolve()
+_REPO_ROOT = _SCRIPT_PATH.parent.parent  # scripts/ -> repo root
+
+if _REPO_ROOT not in _MOM_BOT_PATH.parents:
+    raise RuntimeError(
+        f"mom_bot shadow detected: script lives under {_REPO_ROOT}, "
+        f"but the active 'mom_bot' package loaded from {_MOM_BOT_PATH}. "
+        f"You're probably running the wrong .venv's Python. "
+        f"Use {_REPO_ROOT / '.venv' / 'Scripts' / 'python.exe'}."
+    )
 
 # ---------------------------------------------------------------------------
 # Logging — INFO so smoke output is copy-pasteable into the issue comment.
@@ -65,6 +88,8 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 _logger = logging.getLogger(__name__)
+_logger.info("mom_bot loaded from: %s", _MOM_BOT_PATH)
+_logger.info("script running from: %s", _SCRIPT_PATH)
 
 # ---------------------------------------------------------------------------
 # UI components
