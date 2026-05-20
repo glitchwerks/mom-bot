@@ -1,10 +1,9 @@
 """Tests for discord_display.short_label and the _SHORT_LABELS table.
 
-Source-of-truth for the label table is the plan at:
-  docs/superpowers/plans/2026-05-20-issue-145-button-grid.md § 3.10
-
-The 36-entry table there is canonical; the smoke script's _SHORT_LABELS
-dict at scripts/smoke_v1_button_grid.py (commit 87e2378) is a cross-check.
+Source-of-truth for the label table is the inline ``_RAW_SHORT_LABELS``
+dict in :mod:`mom_bot.post_conditions.discord_display` (see issue #145).
+The smoke script's _SHORT_LABELS dict at scripts/smoke_v1_button_grid.py
+(commit 87e2378) is a cross-check.
 """
 
 from __future__ import annotations
