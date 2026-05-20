@@ -113,26 +113,28 @@ assert max(len(v) for v in SHORT_LABELS.values()) <= 25, (
 def short_label(condition: Mapping[str, Any]) -> str:
     """Return the Discord-button display label for a post-condition.
 
-    The raw canonical label (``condition["label"]``) from siege-web is up
-    to ~60 characters and renders poorly in a 5-button-per-row layout.
-    This function maps each canonical label to a short form (≤ 25 chars)
-    used only by mom-bot's Discord surface; other consumers (web,
-    siege-web, future bots) continue to see the canonical label.
+    The raw canonical description (``condition["description"]``) from
+    siege-web is up to ~60 characters and renders poorly in a
+    5-button-per-row layout.  This function maps each canonical description
+    to a short form (≤ 25 chars) used only by mom-bot's Discord surface;
+    other consumers (web, siege-web, future bots) continue to see the
+    canonical description.
 
     Raises:
-        KeyError: If the condition's canonical label has no mapping.
+        KeyError: If the condition's canonical description has no mapping.
             This is loud-by-design — new catalog entries must be added to
             :data:`SHORT_LABELS` before they can appear on a Discord button.
 
     Args:
-        condition: A post-condition dict with at minimum a ``"label"`` key
-            holding the canonical condition string from siege-web.
+        condition: A post-condition dict with at minimum a
+            ``"description"`` key holding the canonical condition string
+            from siege-web.
 
     Returns:
         The short display string (≤ 25 chars) suitable for
         ``discord.ui.Button(label=...)``.
     """
-    raw: str = condition["label"]
+    raw: str = condition["description"]
     try:
         return SHORT_LABELS[raw]
     except KeyError:

@@ -692,192 +692,192 @@ _HARDCODED_CATALOG: list[dict[str, object]] = [
         "id": 1,
         "meta_label": "Faction & League",
         "condition_type": "league",
-        "label": "Only Champions from the Telerian League can be used.",
+        "description": "Only Champions from the Telerian League can be used.",
     },
     {
         "id": 2,
         "meta_label": "Faction & League",
         "condition_type": "league",
-        "label": "Only Champions from the Gaellen Pact can be used.",
+        "description": "Only Champions from the Gaellen Pact can be used.",
     },
     {
         "id": 3,
         "meta_label": "Faction & League",
         "condition_type": "league",
-        "label": "Only Champions from The Corrupted can be used.",
+        "description": "Only Champions from The Corrupted can be used.",
     },
     {
         "id": 4,
         "meta_label": "Faction & League",
         "condition_type": "league",
-        "label": "Only Champions from the Nyresan Union can be used.",
+        "description": "Only Champions from the Nyresan Union can be used.",
     },
     # --- Faction & League: faction sub-type ---
     {
         "id": 5,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Banner Lord Champions can be used.",
+        "description": "Only Banner Lord Champions can be used.",
     },
     {
         "id": 6,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only High Elves Champions can be used.",
+        "description": "Only High Elves Champions can be used.",
     },
     {
         "id": 7,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Sacred Order Champions can be used.",
+        "description": "Only Sacred Order Champions can be used.",
     },
     {
         "id": 8,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Barbarian Champions can be used.",
+        "description": "Only Barbarian Champions can be used.",
     },
     {
         "id": 9,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Ogryn Tribe Champions can be used.",
+        "description": "Only Ogryn Tribe Champions can be used.",
     },
     {
         "id": 10,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Lizardmen Champions can be used.",
+        "description": "Only Lizardmen Champions can be used.",
     },
     {
         "id": 11,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Skinwalker Champions can be used.",
+        "description": "Only Skinwalker Champions can be used.",
     },
     {
         "id": 12,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Orc Champions can be used.",
+        "description": "Only Orc Champions can be used.",
     },
     {
         "id": 13,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Demonspawn Champions can be used.",
+        "description": "Only Demonspawn Champions can be used.",
     },
     {
         "id": 14,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Undead Horde Champions can be used.",
+        "description": "Only Undead Horde Champions can be used.",
     },
     {
         "id": 15,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Dark Elves Champions can be used.",
+        "description": "Only Dark Elves Champions can be used.",
     },
     {
         "id": 16,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Knights Revenant Champions can be used.",
+        "description": "Only Knights Revenant Champions can be used.",
     },
     {
         "id": 17,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Dwarves Champions can be used.",
+        "description": "Only Dwarves Champions can be used.",
     },
     {
         "id": 18,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Shadowkin Champions can be used.",
+        "description": "Only Shadowkin Champions can be used.",
     },
     {
         "id": 19,
         "meta_label": "Faction & League",
         "condition_type": "faction",
-        "label": "Only Sylvan Watcher Champions can be used.",
+        "description": "Only Sylvan Watcher Champions can be used.",
     },
     # --- Role, Affinity, Rarity: role sub-type ---
     {
         "id": 20,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "role",
-        "label": "Only HP Champions can be used.",
+        "description": "Only HP Champions can be used.",
     },
     {
         "id": 21,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "role",
-        "label": "Only DEF Champions can be used.",
+        "description": "Only DEF Champions can be used.",
     },
     {
         "id": 22,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "role",
-        "label": "Only Support Champions can be used.",
+        "description": "Only Support Champions can be used.",
     },
     {
         "id": 23,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "role",
-        "label": "Only ATK Champions can be used.",
+        "description": "Only ATK Champions can be used.",
     },
     # --- Role, Affinity, Rarity: affinity sub-type ---
     {
         "id": 24,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "affinity",
-        "label": "Only Void Champions can be used.",
+        "description": "Only Void Champions can be used.",
     },
     {
         "id": 25,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "affinity",
-        "label": "Only Force Champions can be used.",
+        "description": "Only Force Champions can be used.",
     },
     {
         "id": 26,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "affinity",
-        "label": "Only Magic Champions can be used.",
+        "description": "Only Magic Champions can be used.",
     },
     {
         "id": 27,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "affinity",
-        "label": "Only Spirit Champions can be used.",
+        "description": "Only Spirit Champions can be used.",
     },
     # --- Role, Affinity, Rarity: rarity sub-type ---
     {
         "id": 28,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "rarity",
-        "label": "Only Legendary Champions can be used.",
+        "description": "Only Legendary Champions can be used.",
     },
     {
         "id": 29,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "rarity",
-        "label": "Only Epic Champions can be used.",
+        "description": "Only Epic Champions can be used.",
     },
     {
         "id": 30,
         "meta_label": "Role, Affinity, Rarity",
         "condition_type": "rarity",
-        "label": "Only Rare Champions can be used.",
+        "description": "Only Rare Champions can be used.",
     },
     # --- Effects & Other: effect sub-type ---
     {
         "id": 31,
         "meta_label": "Effects & Other",
         "condition_type": "effect",
-        "label": (
+        "description": (
             "All Champions are immune to Turn Meter reduction effects."
         ),
     },
@@ -885,7 +885,7 @@ _HARDCODED_CATALOG: list[dict[str, object]] = [
         "id": 32,
         "meta_label": "Effects & Other",
         "condition_type": "effect",
-        "label": (
+        "description": (
             "All Champions are immune to Turn Meter fill effects."
         ),
     },
@@ -893,7 +893,7 @@ _HARDCODED_CATALOG: list[dict[str, object]] = [
         "id": 33,
         "meta_label": "Effects & Other",
         "condition_type": "effect",
-        "label": (
+        "description": (
             "All Champions are immune to cooldown increasing effects."
         ),
     },
@@ -901,7 +901,7 @@ _HARDCODED_CATALOG: list[dict[str, object]] = [
         "id": 34,
         "meta_label": "Effects & Other",
         "condition_type": "effect",
-        "label": (
+        "description": (
             "All Champions are immune to cooldown decreasing effects."
         ),
     },
@@ -909,23 +909,23 @@ _HARDCODED_CATALOG: list[dict[str, object]] = [
         "id": 35,
         "meta_label": "Effects & Other",
         "condition_type": "effect",
-        "label": "All Champions are immune to [Sheep] debuffs.",
+        "description": "All Champions are immune to [Sheep] debuffs.",
     },
     # --- Effects & Other: other sub-type ---
     {
         "id": 36,
         "meta_label": "Effects & Other",
         "condition_type": "other",
-        "label": "Champions cannot be revived.",
+        "description": "Champions cannot be revived.",
     },
 ]
 
-# Verify no label exceeds Discord's 80-char button-label hard cap.
-# This assert fails loudly if a future label addition breaks the limit
+# Verify no description exceeds Discord's 80-char button-label hard cap.
+# This assert fails loudly if a future entry addition breaks the limit
 # before the bot even starts.
 assert (
-    max(len(str(c["label"])) for c in _HARDCODED_CATALOG) <= 80
-), "A label in _HARDCODED_CATALOG exceeds Discord's 80-char button limit."
+    max(len(str(c["description"])) for c in _HARDCODED_CATALOG) <= 80
+), "A description in _HARDCODED_CATALOG exceeds Discord's 80-char button limit."
 
 # ---------------------------------------------------------------------------
 # Shortened label table for /v1-smoke-short-labels
@@ -993,13 +993,13 @@ _SHORT_LABELS: dict[str, str] = {
     "Champions cannot be revived.": "No revives",
 }
 
-# Every raw label in _HARDCODED_CATALOG must have a short-label mapping.
+# Every description in _HARDCODED_CATALOG must have a short-label mapping.
 # Fails at import time if a new catalog entry is added without a mapping.
 assert all(
-    c["label"] in _SHORT_LABELS for c in _HARDCODED_CATALOG
+    c["description"] in _SHORT_LABELS for c in _HARDCODED_CATALOG
 ), (
-    "One or more _HARDCODED_CATALOG labels are missing from _SHORT_LABELS. "
-    "Add the mapping before proceeding."
+    "One or more _HARDCODED_CATALOG descriptions are missing from "
+    "_SHORT_LABELS. Add the mapping before proceeding."
 )
 
 # Short labels must fit within Discord's button-label cap (80 chars).
@@ -1059,7 +1059,7 @@ def _sort_key_hc(cond: dict[str, object]) -> tuple[int, str, int]:
 _HC_SORTED: list[_FakeCondition] = [
     _FakeCondition(
         id=int(c["id"]),  # type: ignore[arg-type]
-        label=str(c["label"]),
+        label=str(c["description"]),
         condition_type=str(c["condition_type"]),
         meta_label=str(c["meta_label"]),
     )
@@ -1433,7 +1433,7 @@ for _sl_meta_label, _sl_types in META_GROUPS:
         [
             _FakeCondition(
                 id=int(c["id"]),  # type: ignore[arg-type]
-                label=str(c["label"]),
+                label=str(c["description"]),
                 condition_type=str(c["condition_type"]),
                 meta_label=str(c["meta_label"]),
             )

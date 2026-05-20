@@ -163,13 +163,11 @@ def test_build_summary_embed_overflow_truncates() -> None:
 _GRID_CATALOG_FACTION: list[dict[str, Any]] = [
     {
         "id": 1,
-        "label": "Only Banner Lord Champions can be used.",
         "description": "Only Banner Lord Champions can be used.",
         "condition_type": "faction",
     },
     {
         "id": 2,
-        "label": "Only Sylvan Watcher Champions can be used.",
         "description": "Only Sylvan Watcher Champions can be used.",
         "condition_type": "faction",
     },
@@ -178,7 +176,6 @@ _GRID_CATALOG_FACTION: list[dict[str, Any]] = [
 _GRID_CATALOG_ROLE: list[dict[str, Any]] = [
     {
         "id": 3,
-        "label": "Only HP Champions can be used.",
         "description": "Only HP Champions can be used.",
         "condition_type": "role",
     },
@@ -235,7 +232,6 @@ def test_grid_view_component_count_within_25() -> None:
     catalog = [
         {
             "id": i,
-            "label": lbl,
             "description": lbl,
             "condition_type": "faction",
         }
@@ -292,7 +288,6 @@ def test_grid_view_buttons_use_short_labels_not_canonical() -> None:
     catalog = [
         {
             "id": 1,
-            "label": "Only Sylvan Watcher Champions can be used.",
             "description": "Only Sylvan Watcher Champions can be used.",
             "condition_type": "faction",
         }
@@ -317,7 +312,7 @@ def test_grid_view_button_count_matches_expected_for_19_11_6() -> None:
 
     # Build the full 36-entry catalog from the canonical table.
     faction_conditions = [
-        {"id": i, "label": lbl, "description": lbl, "condition_type": "faction"}
+        {"id": i, "description": lbl, "condition_type": "faction"}
         for i, lbl in enumerate(
             [
                 "Only Champions from the Telerian League can be used.",
@@ -344,7 +339,7 @@ def test_grid_view_button_count_matches_expected_for_19_11_6() -> None:
         )
     ]
     role_conditions = [
-        {"id": i, "label": lbl, "description": lbl, "condition_type": "role"}
+        {"id": i, "description": lbl, "condition_type": "role"}
         for i, lbl in enumerate(
             [
                 "Only HP Champions can be used.",
@@ -363,7 +358,7 @@ def test_grid_view_button_count_matches_expected_for_19_11_6() -> None:
         )
     ]
     effect_conditions = [
-        {"id": i, "label": lbl, "description": lbl, "condition_type": "effect"}
+        {"id": i, "description": lbl, "condition_type": "effect"}
         for i, lbl in enumerate(
             [
                 "All Champions are immune to Turn Meter reduction effects.",
@@ -512,7 +507,6 @@ def test_grid_view_b1_regression_subpaginated_meta_renders_heading_once() -> Non
     catalog = [
         {
             "id": i,
-            "label": lbl,
             "description": lbl,
             "condition_type": "faction",
         }
@@ -567,25 +561,22 @@ async def test_save_callback_puts_selected_ids_and_strips_view() -> None:
     """SaveButton aggregates ON selections and PUTs them via the client."""
     from mom_bot.post_conditions.views import PostConditionsGridView, SaveButton
 
-    # "label" is required by short_label(); plan's example omitted it.
+    # "description" is required by short_label() — matches siege-web API.
     catalog = [
         {
             "id": 1,
             "condition_type": "faction",
-            "label": "Only Banner Lord Champions can be used.",
-            "description": "F1",
+            "description": "Only Banner Lord Champions can be used.",
         },
         {
             "id": 2,
             "condition_type": "faction",
-            "label": "Only High Elves Champions can be used.",
-            "description": "F2",
+            "description": "Only High Elves Champions can be used.",
         },
         {
             "id": 3,
             "condition_type": "role",
-            "label": "Only HP Champions can be used.",
-            "description": "R1",
+            "description": "Only HP Champions can be used.",
         },
     ]
     siege_client = MagicMock()
@@ -619,13 +610,12 @@ async def test_cancel_callback_makes_no_client_call_and_strips_view() -> None:
     """CancelButton does not touch the client."""
     from mom_bot.post_conditions.views import CancelButton, PostConditionsGridView
 
-    # "label" is required by short_label(); plan's example omitted it.
+    # "description" is required by short_label() — matches siege-web API.
     catalog = [
         {
             "id": 1,
             "condition_type": "faction",
-            "label": "Only Banner Lord Champions can be used.",
-            "description": "F1",
+            "description": "Only Banner Lord Champions can be used.",
         }
     ]
     siege_client = MagicMock()
@@ -656,13 +646,12 @@ async def test_save_callback_handles_siege_web_error() -> None:
     from mom_bot.post_conditions.client import SiegeWebError
     from mom_bot.post_conditions.views import PostConditionsGridView, SaveButton
 
-    # "label" is required by short_label(); plan's example omitted it.
+    # "description" is required by short_label() — matches siege-web API.
     catalog = [
         {
             "id": 1,
             "condition_type": "faction",
-            "label": "Only Banner Lord Champions can be used.",
-            "description": "F1",
+            "description": "Only Banner Lord Champions can be used.",
         }
     ]
     siege_client = MagicMock()

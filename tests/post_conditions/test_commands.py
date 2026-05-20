@@ -34,14 +34,12 @@ _TOKEN = "secret-bot-token"
 _CATALOG: list[dict[str, Any]] = [
     {
         "id": 5,
-        "label": "Only HP Champions can be used.",
         "description": "Only HP Champions can be used.",
         "stronghold_level": 1,
         "condition_type": "role",
     },
     {
         "id": 12,
-        "label": "Only Barbarian Champions can be used.",
         "description": "Only Barbarian Champions can be used.",
         "stronghold_level": 1,
         "condition_type": "faction",
@@ -51,7 +49,6 @@ _CATALOG: list[dict[str, Any]] = [
 _PREFS: list[dict[str, Any]] = [
     {
         "id": 5,
-        "label": "Only HP Champions can be used.",
         "description": "Only HP Champions can be used.",
         "stronghold_level": 1,
         "condition_type": "role",

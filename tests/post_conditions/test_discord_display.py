@@ -24,7 +24,7 @@ def test_short_label_returns_short_form_for_known_raw_label() -> None:
     """
     condition = {
         "id": 42,
-        "label": "Only Sylvan Watcher Champions can be used.",
+        "description": "Only Sylvan Watcher Champions can be used.",
         "condition_type": "faction",
     }
     assert short_label(condition) == "Sylvan Watchers"
@@ -32,7 +32,7 @@ def test_short_label_returns_short_form_for_known_raw_label() -> None:
 
 def test_short_label_raises_keyerror_for_unknown_raw_label() -> None:
     """Unknown raw labels raise KeyError — silent fall-through is disallowed."""
-    condition = {"id": 999, "label": "Some new condition not in the table."}
+    condition = {"id": 999, "description": "Some new condition not in the table."}
     with pytest.raises(KeyError, match="No short label mapping"):
         short_label(condition)
 
@@ -72,7 +72,7 @@ def test_short_label_covers_each_meta_group(raw: str, expected: str) -> None:
     Catches table truncation if a future edit accidentally drops a section.
     The (raw, expected) pairs are cross-checked against plan § 3.10.
     """
-    assert short_label({"label": raw}) == expected
+    assert short_label({"description": raw}) == expected
 
 
 def test_short_labels_table_covers_full_hardcoded_catalog() -> None:
