@@ -1,6 +1,6 @@
 """Phase 0 smoke for issue #145 V1 button-grid path.
 
-Registers three slash commands on the dev guild:
+Registers four slash commands on the dev guild:
 
 ``/v1-smoke``
     Responds ephemerally with a :class:`discord.ui.View` carrying 20 toggle
@@ -26,6 +26,19 @@ Registers three slash commands on the dev guild:
     via :class:`~mom_bot.post_conditions.client.SiegeWebClient`, takes the
     first 20 conditions sorted by ``META_GROUPS`` order, pre-sets indices
     2, 7, 14 to ``success``, and sends a single-page ephemeral view via
+    :meth:`~discord.Webhook.send` (followup).
+
+``/v1-smoke-hardcoded-catalog``
+    Same rendering test as ``/v1-smoke-real-catalog`` but uses a hardcoded
+    mirror of the production post-conditions catalog (36 conditions, 3
+    meta-groups) so siege-web does not need to be reachable from the dev
+    machine.  Paginates at 20 toggles per page (page 0: 20 entries, page 1:
+    16 entries).  The ``"Role, Affinity, Rarity"`` meta-group genuinely spans
+    both pages, exercising the B1 double-heading regression guard against
+    real-data label shapes (labels up to ~55 chars).
+
+    Defers immediately (mirrors the production defer path), then constructs
+    the view synchronously from :data:`_HARDCODED_CATALOG` and sends it via
     :meth:`~discord.Webhook.send` (followup).
 
 Run::
@@ -55,6 +68,17 @@ Confirms (verify manually in the dev guild):
       pre-styled ``success`` (indices 2, 7, 14 of the sorted list).  Save
       logs selected ids and labels.  If siege-web is unreachable the command
       responds with an ephemeral error message (no silent failure).
+  13. ``/v1-smoke-hardcoded-catalog`` defers, then renders page 0 (20 toggles
+      + 4 nav).  The three pre-styled ``success`` buttons are Banner Lord,
+      High Elves, Sacred Order (first three ``faction`` entries).  Prev is
+      disabled; Next is enabled.
+  14. Click Next.  Page 1 renders 16 toggles + 4 nav.  Embed shows the three
+      pre-selected faction items under ``Faction & League``.  Next is disabled,
+      Prev is enabled.
+  15. Toggle one ``Role, Affinity, Rarity`` item on page 1 and one from page
+      0 (navigate back first).  Embed shows both meta-group headings each
+      appearing **exactly once** (B1 regression guard with real data).
+  16. Save logs selected condition ids + labels across both pages.
 """
 
 from __future__ import annotations
@@ -626,6 +650,654 @@ class MultiPageSmokeView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# /v1-smoke-hardcoded-catalog — multipage real-label smoke (no siege-web)
+# ---------------------------------------------------------------------------
+
+# Raw hardcoded mirror of the production post-conditions catalog.
+# Id assignment: stable monotonically-increasing integer, 1-based.
+#   ids  1-4:  league  (Telerian / Gaellen / Corrupted / Nyresan)
+#   ids  5-19: faction (Banner Lord … Sylvan Watcher)
+#   ids 20-23: role    (HP / DEF / Support / ATK)
+#   ids 24-27: affinity (Void / Force / Magic / Spirit)
+#   ids 28-30: rarity   (Legendary / Epic / Rare)
+#   ids 31-35: effect   (immune conditions)
+#   id  36:    other    (cannot be revived)
+#
+# Assertion: no label exceeds Discord's 80-char button-label cap.
+_HARDCODED_CATALOG: list[dict[str, object]] = [
+    # --- Faction & League: league sub-type ---
+    {
+        "id": 1,
+        "meta_label": "Faction & League",
+        "condition_type": "league",
+        "label": "Only Champions from the Telerian League can be used.",
+    },
+    {
+        "id": 2,
+        "meta_label": "Faction & League",
+        "condition_type": "league",
+        "label": "Only Champions from the Gaellen Pact can be used.",
+    },
+    {
+        "id": 3,
+        "meta_label": "Faction & League",
+        "condition_type": "league",
+        "label": "Only Champions from The Corrupted can be used.",
+    },
+    {
+        "id": 4,
+        "meta_label": "Faction & League",
+        "condition_type": "league",
+        "label": "Only Champions from the Nyresan Union can be used.",
+    },
+    # --- Faction & League: faction sub-type ---
+    {
+        "id": 5,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Banner Lord Champions can be used.",
+    },
+    {
+        "id": 6,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only High Elves Champions can be used.",
+    },
+    {
+        "id": 7,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Sacred Order Champions can be used.",
+    },
+    {
+        "id": 8,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Barbarian Champions can be used.",
+    },
+    {
+        "id": 9,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Ogryn Tribe Champions can be used.",
+    },
+    {
+        "id": 10,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Lizardmen Champions can be used.",
+    },
+    {
+        "id": 11,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Skinwalker Champions can be used.",
+    },
+    {
+        "id": 12,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Orc Champions can be used.",
+    },
+    {
+        "id": 13,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Demonspawn Champions can be used.",
+    },
+    {
+        "id": 14,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Undead Horde Champions can be used.",
+    },
+    {
+        "id": 15,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Dark Elves Champions can be used.",
+    },
+    {
+        "id": 16,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Knights Revenant Champions can be used.",
+    },
+    {
+        "id": 17,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Dwarves Champions can be used.",
+    },
+    {
+        "id": 18,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Shadowkin Champions can be used.",
+    },
+    {
+        "id": 19,
+        "meta_label": "Faction & League",
+        "condition_type": "faction",
+        "label": "Only Sylvan Watcher Champions can be used.",
+    },
+    # --- Role, Affinity, Rarity: role sub-type ---
+    {
+        "id": 20,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "role",
+        "label": "Only HP Champions can be used.",
+    },
+    {
+        "id": 21,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "role",
+        "label": "Only DEF Champions can be used.",
+    },
+    {
+        "id": 22,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "role",
+        "label": "Only Support Champions can be used.",
+    },
+    {
+        "id": 23,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "role",
+        "label": "Only ATK Champions can be used.",
+    },
+    # --- Role, Affinity, Rarity: affinity sub-type ---
+    {
+        "id": 24,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "affinity",
+        "label": "Only Void Champions can be used.",
+    },
+    {
+        "id": 25,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "affinity",
+        "label": "Only Force Champions can be used.",
+    },
+    {
+        "id": 26,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "affinity",
+        "label": "Only Magic Champions can be used.",
+    },
+    {
+        "id": 27,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "affinity",
+        "label": "Only Spirit Champions can be used.",
+    },
+    # --- Role, Affinity, Rarity: rarity sub-type ---
+    {
+        "id": 28,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "rarity",
+        "label": "Only Legendary Champions can be used.",
+    },
+    {
+        "id": 29,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "rarity",
+        "label": "Only Epic Champions can be used.",
+    },
+    {
+        "id": 30,
+        "meta_label": "Role, Affinity, Rarity",
+        "condition_type": "rarity",
+        "label": "Only Rare Champions can be used.",
+    },
+    # --- Effects & Other: effect sub-type ---
+    {
+        "id": 31,
+        "meta_label": "Effects & Other",
+        "condition_type": "effect",
+        "label": (
+            "All Champions are immune to Turn Meter reduction effects."
+        ),
+    },
+    {
+        "id": 32,
+        "meta_label": "Effects & Other",
+        "condition_type": "effect",
+        "label": (
+            "All Champions are immune to Turn Meter fill effects."
+        ),
+    },
+    {
+        "id": 33,
+        "meta_label": "Effects & Other",
+        "condition_type": "effect",
+        "label": (
+            "All Champions are immune to cooldown increasing effects."
+        ),
+    },
+    {
+        "id": 34,
+        "meta_label": "Effects & Other",
+        "condition_type": "effect",
+        "label": (
+            "All Champions are immune to cooldown decreasing effects."
+        ),
+    },
+    {
+        "id": 35,
+        "meta_label": "Effects & Other",
+        "condition_type": "effect",
+        "label": "All Champions are immune to [Sheep] debuffs.",
+    },
+    # --- Effects & Other: other sub-type ---
+    {
+        "id": 36,
+        "meta_label": "Effects & Other",
+        "condition_type": "other",
+        "label": "Champions cannot be revived.",
+    },
+]
+
+# Verify no label exceeds Discord's 80-char button-label hard cap.
+# This assert fails loudly if a future label addition breaks the limit
+# before the bot even starts.
+assert (
+    max(len(str(c["label"])) for c in _HARDCODED_CATALOG) <= 80
+), "A label in _HARDCODED_CATALOG exceeds Discord's 80-char button limit."
+
+# Canonical sort order for the hardcoded catalog.  Mirrors _META_ORDER but
+# built here from META_GROUPS so both sections stay in sync.
+_HC_META_ORDER: dict[str, int] = {
+    ct: group_idx
+    for group_idx, (_label, types) in enumerate(META_GROUPS)
+    for ct in types
+}
+
+
+def _sort_key_hc(cond: dict[str, object]) -> tuple[int, str, int]:
+    """Return a sort key for a hardcoded catalog entry dict.
+
+    Sorts by ``(META_GROUPS order index, condition_type, id)`` so the
+    resulting list mirrors the canonical production page ordering.
+
+    Args:
+        cond: A dict from :data:`_HARDCODED_CATALOG` with at minimum
+            ``condition_type`` and ``id`` keys.
+
+    Returns:
+        A 3-tuple suitable for use with :func:`sorted`.
+    """
+    ct = str(cond.get("condition_type", ""))
+    return (
+        _HC_META_ORDER.get(ct, len(META_GROUPS)),
+        ct,
+        int(cond.get("id", 0)),  # type: ignore[arg-type]
+    )
+
+
+# Pre-sort the catalog and convert to _FakeCondition for use by the
+# multipage view.  This mirrors the sort that split_meta_for_modals
+# would apply in production.
+#
+# Sorted order (36 entries):
+#   indices  0-14: faction  ids 5-19   (15 items — Banner Lord … Sylvan)
+#   indices 15-18: league   ids 1-4    ( 4 items — Telerian … Nyresan)
+#   indices 19-22: affinity ids 24-27  ( 4 items — Void … Spirit)
+#   indices 23-25: rarity   ids 28-30  ( 3 items — Legendary … Rare)
+#   indices 26-29: role     ids 20-23  ( 4 items — HP … ATK)
+#   indices 30-34: effect   ids 31-35  ( 5 items — immune conditions)
+#   index  35:     other    id  36     ( 1 item  — cannot be revived)
+#
+# Page 0 (indices 0-19): 15 faction + 4 league + 1 affinity (Void)
+# Page 1 (indices 20-35): 3 affinity + 3 rarity + 4 role + 6 effects&other
+#
+# "Role, Affinity, Rarity" spans both pages → the B1 double-heading
+# regression guard is exercised with real production data shapes.
+_HC_SORTED: list[_FakeCondition] = [
+    _FakeCondition(
+        id=int(c["id"]),  # type: ignore[arg-type]
+        label=str(c["label"]),
+        condition_type=str(c["condition_type"]),
+        meta_label=str(c["meta_label"]),
+    )
+    for c in sorted(_HARDCODED_CATALOG, key=_sort_key_hc)
+]
+
+_HC_PAGE_SIZE: int = 20
+
+_HC_PAGES: list[_GridPage] = [
+    _GridPage(
+        label=(
+            f"Page {page_idx + 1} of "
+            f"{(len(_HC_SORTED) + _HC_PAGE_SIZE - 1) // _HC_PAGE_SIZE}"
+        ),
+        conditions=_HC_SORTED[
+            page_idx * _HC_PAGE_SIZE: (page_idx + 1) * _HC_PAGE_SIZE
+        ],
+    )
+    for page_idx in range(
+        (len(_HC_SORTED) + _HC_PAGE_SIZE - 1) // _HC_PAGE_SIZE
+    )
+]
+
+# Pre-set the first three faction conditions to ON.  These are Banner Lord
+# (id=5), High Elves (id=6), Sacred Order (id=7) — the first three entries
+# in the sorted list.  All three land on page 0, so the initial render shows
+# them visually without requiring any navigation.
+_HC_DEFAULT_ON: frozenset[int] = frozenset(
+    cond.id
+    for cond in _HC_SORTED
+    if cond.condition_type == "faction"
+)
+# Trim to first three only.
+_HC_DEFAULT_ON = frozenset(
+    sorted(_HC_DEFAULT_ON)[:3]
+)
+
+_logger.info(
+    "Hardcoded catalog: %d entries, %d pages; default-on ids=%r",
+    len(_HC_SORTED),
+    len(_HC_PAGES),
+    sorted(_HC_DEFAULT_ON),
+)
+
+
+def _build_hc_summary_embed(
+    selections: dict[int, bool],
+) -> discord.Embed:
+    """Build a summary embed for the hardcoded-catalog smoke view.
+
+    Groups selected condition labels under their ``meta_label`` heading.
+    The heading is rendered **exactly once** per meta-group even when
+    conditions from that group span multiple pages — this is the B1
+    regression guard applied to real production data shapes.
+
+    Args:
+        selections: Mapping of condition id → checked state.
+
+    Returns:
+        A :class:`discord.Embed` whose description lists selected labels
+        under a single meta-group heading, or ``"(none selected)"`` if
+        nothing is selected.
+    """
+    # Walk _HC_SORTED (not _HC_PAGES) so every condition is visited once
+    # regardless of which page it sits on.  Buckets deduplicate the heading.
+    by_meta: dict[str, list[str]] = {}
+    for cond in _HC_SORTED:
+        if not selections.get(cond.id, False):
+            continue
+        bucket = by_meta.setdefault(cond.meta_label, [])
+        bucket.append(cond.label)
+
+    if not by_meta:
+        description = "(none selected)"
+    else:
+        lines: list[str] = []
+        for meta_label, labels in by_meta.items():
+            lines.append(f"**{meta_label}**")
+            lines.append(", ".join(labels))
+        description = "\n".join(lines)
+
+    return discord.Embed(
+        title="Staged selections (hardcoded catalog)",
+        description=description,
+        colour=discord.Colour.blurple(),
+    )
+
+
+class _HcToggleButton(
+    discord.ui.Button["HardcodedCatalogSmokeView"]
+):
+    """Toggle button for the hardcoded-catalog smoke view.
+
+    Flips the ``_selections`` dict on the parent view, triggers a full
+    component rebuild via :meth:`HardcodedCatalogSmokeView._render`, and
+    edits the message with the updated view and rebuilt summary embed.
+
+    Attributes:
+        _condition_id: The condition id keyed into
+            :attr:`HardcodedCatalogSmokeView._selections`.
+    """
+
+    def __init__(
+        self,
+        *,
+        condition: _FakeCondition,
+        row: int,
+        on: bool,
+    ) -> None:
+        """Initialise a toggle button for the given hardcoded condition.
+
+        Args:
+            condition: The :class:`_FakeCondition` this button represents.
+            row: The Discord row (0-3) to place this button in.
+            on: Whether this button starts in the ON (``success``) state.
+        """
+        super().__init__(
+            style=ButtonStyle.success if on else ButtonStyle.secondary,
+            label=condition.label,
+            row=row,
+            custom_id=f"hc-toggle-{condition.id}",
+        )
+        self._condition_id: int = condition.id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Flip selection state, rebuild components, and edit the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        assert view is not None, (
+            "view must be set by discord.py before callback"
+        )
+        view._selections[self._condition_id] = not view._selections.get(
+            self._condition_id, False
+        )
+        view._render()
+        embed = _build_hc_summary_embed(view._selections)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _HcNavButton(
+    discord.ui.Button["HardcodedCatalogSmokeView"]
+):
+    """Prev / Next page navigation for the hardcoded-catalog smoke view.
+
+    Adjusts ``_page_index`` on the parent view, re-renders the components
+    for the new page, and edits the message.  Selections persist across
+    page changes.
+
+    Attributes:
+        _direction: Either ``"prev"`` or ``"next"``.
+    """
+
+    def __init__(self, *, direction: str, disabled: bool) -> None:
+        """Initialise a nav button.
+
+        Args:
+            direction: ``"prev"`` or ``"next"``.
+            disabled: Whether the button starts disabled (True for Prev
+                on page 0, True for Next on the last page).
+        """
+        assert direction in ("prev", "next"), (
+            f"direction must be 'prev' or 'next', got {direction!r}"
+        )
+        super().__init__(
+            style=ButtonStyle.secondary,
+            label="Prev" if direction == "prev" else "Next",
+            row=4,
+            disabled=disabled,
+            custom_id=f"hc-nav-{direction}",
+        )
+        self._direction: str = direction
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Change the page index, rebuild components, and edit the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        assert view is not None, (
+            "view must be set by discord.py before callback"
+        )
+        if self._direction == "prev" and view._page_index > 0:
+            view._page_index -= 1
+        elif (
+            self._direction == "next"
+            and view._page_index < len(_HC_PAGES) - 1
+        ):
+            view._page_index += 1
+        view._render()
+        embed = _build_hc_summary_embed(view._selections)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _HcSaveButton(
+    discord.ui.Button["HardcodedCatalogSmokeView"]
+):
+    """Save button for the hardcoded-catalog smoke view.
+
+    Logs all selected condition ids and labels across both pages, then
+    strips the view from the message.
+    """
+
+    def __init__(self) -> None:
+        """Initialise the Save button with primary style."""
+        super().__init__(
+            style=ButtonStyle.primary,
+            label="Save",
+            row=4,
+            custom_id="hc-save",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Log staged selections across all pages and acknowledge.
+
+        Collects condition ids from ``_selections``, looks up the label in
+        ``_HC_SORTED``, and logs ``(id, label)`` pairs at INFO.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        selected: list[tuple[int, str]] = []
+        if view is not None:
+            id_to_label: dict[int, str] = {
+                c.id: c.label for c in _HC_SORTED
+            }
+            selected = [
+                (cid, id_to_label.get(cid, "?"))
+                for cid, on in sorted(view._selections.items())
+                if on
+            ]
+        _logger.info(
+            "v1-smoke-hardcoded-catalog save: selected=%r", selected
+        )
+        await interaction.response.edit_message(content="ack", view=None)
+
+
+class _HcCancelButton(
+    discord.ui.Button["HardcodedCatalogSmokeView"]
+):
+    """Cancel button for the hardcoded-catalog smoke view."""
+
+    def __init__(self) -> None:
+        """Initialise the Cancel button with danger style."""
+        super().__init__(
+            style=ButtonStyle.danger,
+            label="Cancel",
+            row=4,
+            custom_id="hc-cancel",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Log cancel intent and dismiss the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        _logger.info("v1-smoke-hardcoded-catalog cancel")
+        await interaction.response.edit_message(
+            content="cancelled", view=None
+        )
+
+
+class HardcodedCatalogSmokeView(discord.ui.View):
+    """Multipage :class:`discord.ui.View` for ``/v1-smoke-hardcoded-catalog``.
+
+    Holds the full selection state across all pages in ``_selections``.
+    Re-renders its component list on every toggle or nav click via
+    :meth:`_render`.
+
+    With 36 conditions paginated at 20 per page:
+
+    - Page 0 (20 toggles): 15 faction + 4 league + 1 affinity (Void)
+    - Page 1 (16 toggles): 3 affinity + 3 rarity + 4 role + 6 effects/other
+
+    The ``"Role, Affinity, Rarity"`` meta-group spans both pages, which is
+    the live B1 regression scenario.  The summary embed renders that heading
+    **exactly once** regardless of which page the user is on.
+
+    Attributes:
+        _page_index: Zero-based index of the currently displayed page.
+        _selections: Mapping of condition id → checked state across all
+            pages.  Persists across page navigation.
+        timeout: View expiry in seconds (300 — five minutes).
+    """
+
+    def __init__(self) -> None:
+        """Construct the view, seed default selections, and render page 0."""
+        super().__init__(timeout=300)
+        self._page_index: int = 0
+        self._selections: dict[int, bool] = {
+            cond.id: (cond.id in _HC_DEFAULT_ON)
+            for cond in _HC_SORTED
+        }
+        self._render()
+
+    def _render(self) -> None:
+        """Rebuild all view children for the current ``_page_index``.
+
+        Clears existing items, then adds:
+
+        - One :class:`_HcToggleButton` per condition on the current page,
+          arranged into rows 0-3 (5 buttons per row).
+        - One :class:`_HcNavButton` for Prev (disabled on page 0).
+        - One :class:`_HcSaveButton`.
+        - One :class:`_HcCancelButton`.
+        - One :class:`_HcNavButton` for Next (disabled on last page).
+        """
+        self.clear_items()
+        page = _HC_PAGES[self._page_index]
+        for idx, cond in enumerate(page.conditions):
+            self.add_item(
+                _HcToggleButton(
+                    condition=cond,
+                    row=idx // 5,
+                    on=self._selections.get(cond.id, False),
+                )
+            )
+
+        last_page = len(_HC_PAGES) - 1
+        self.add_item(
+            _HcNavButton(
+                direction="prev",
+                disabled=(self._page_index == 0),
+            )
+        )
+        self.add_item(_HcSaveButton())
+        self.add_item(_HcCancelButton())
+        self.add_item(
+            _HcNavButton(
+                direction="next",
+                disabled=(self._page_index >= last_page),
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
 # /v1-smoke-real-catalog — single-page real label-width smoke
 # ---------------------------------------------------------------------------
 
@@ -870,15 +1542,17 @@ class RealCatalogSmokeView(discord.ui.View):
 class SmokeBot(discord.Client):
     """Minimal :class:`discord.Client` for the Phase 0 V1 button-grid smoke.
 
-    Registers three guild-scoped slash commands on ``setup_hook``:
+    Registers four guild-scoped slash commands on ``setup_hook``:
 
     - ``/v1-smoke`` — single-page toggle grid.
     - ``/v1-grid-smoke-multipage`` — two-page persistence and B1 regression
       guard.
     - ``/v1-smoke-real-catalog`` — real label-width smoke against the live
       siege-web catalog.
+    - ``/v1-smoke-hardcoded-catalog`` — real-label multipage smoke using
+      a hardcoded mirror of the production catalog (no siege-web required).
 
-    All three commands can coexist with earlier V2 smoke commands in the
+    All four commands can coexist with earlier V2 smoke commands in the
     same dev guild because they use distinct names.
 
     Attributes:
@@ -896,7 +1570,7 @@ class SmokeBot(discord.Client):
         self._guild_id: int = int(load_secret("guild-id"))
 
     async def setup_hook(self) -> None:
-        """Register and sync all three smoke commands to the dev guild.
+        """Register and sync all four smoke commands to the dev guild.
 
         Called by discord.py after login, before the gateway connects.
         All commands are registered as guild-scoped so they appear in the
@@ -1055,10 +1729,85 @@ class SmokeBot(discord.Client):
             view = RealCatalogSmokeView(conditions=first_twenty)
             await interaction.followup.send(view=view, ephemeral=True)
 
+        @self.tree.command(
+            name="v1-smoke-hardcoded-catalog",
+            description=(
+                "Phase 0 smoke — real labels, hardcoded catalog"
+                " (no siege-web)"
+            ),
+            guild=guild,
+        )
+        async def v1_smoke_hardcoded_catalog(
+            interaction: discord.Interaction,
+        ) -> None:
+            """Respond to ``/v1-smoke-hardcoded-catalog``.
+
+            Defers immediately (mirrors the production defer path), then
+            constructs a :class:`HardcodedCatalogSmokeView` from the
+            pre-built :data:`_HC_PAGES` and sends the initial page-0 view
+            plus summary embed via followup.
+
+            The ``"Role, Affinity, Rarity"`` meta-group spans pages 0 and 1,
+            exercising the B1 double-heading regression guard with real
+            production label shapes — without requiring siege-web access.
+
+            If construction fails for any reason (e.g. a future label
+            addition breaks an invariant), the user receives an ephemeral
+            error message with the traceback summary.
+
+            Args:
+                interaction: The slash-command interaction from Discord.
+            """
+            _logger.info(
+                "smoke: /v1-smoke-hardcoded-catalog invoked by"
+                " %s (id=%s)",
+                interaction.user,
+                interaction.user.id,
+            )
+            # Defer immediately — mirrors the production path that defers
+            # before any async work.  Construction here is synchronous but
+            # we stay consistent so the smoke exercises the same interaction
+            # lifecycle as /v1-smoke-real-catalog.
+            await interaction.response.defer(ephemeral=True)
+
+            try:
+                view = HardcodedCatalogSmokeView()
+                embed = _build_hc_summary_embed(view._selections)
+            except Exception as exc:
+                _logger.exception(
+                    "Failed to construct HardcodedCatalogSmokeView"
+                )
+                await interaction.followup.send(
+                    f"Construction error: {exc!r}",
+                    ephemeral=True,
+                )
+                return
+
+            _logger.info(
+                "v1-smoke-hardcoded-catalog: %d total conditions,"
+                " %d pages, page-size=%d; default-on=%r",
+                len(_HC_SORTED),
+                len(_HC_PAGES),
+                _HC_PAGE_SIZE,
+                sorted(_HC_DEFAULT_ON),
+            )
+            for page_idx, page in enumerate(_HC_PAGES):
+                _logger.info(
+                    "  page %d (%d conditions): %s",
+                    page_idx,
+                    len(page.conditions),
+                    [c.label[:40] for c in page.conditions],
+                )
+
+            await interaction.followup.send(
+                embed=embed, view=view, ephemeral=True
+            )
+
         await self.tree.sync(guild=guild)
         _logger.info(
-            "Synced /v1-smoke, /v1-grid-smoke-multipage, and"
-            " /v1-smoke-real-catalog to guild %d",
+            "Synced /v1-smoke, /v1-grid-smoke-multipage,"
+            " /v1-smoke-real-catalog, and"
+            " /v1-smoke-hardcoded-catalog to guild %d",
             self._guild_id,
         )
 
@@ -1069,8 +1818,8 @@ class SmokeBot(discord.Client):
         """
         _logger.info(
             "Smoke bot ready: %s (id=%s) — invoke /v1-smoke,"
-            " /v1-grid-smoke-multipage, or /v1-smoke-real-catalog"
-            " in guild %d",
+            " /v1-grid-smoke-multipage, /v1-smoke-real-catalog, or"
+            " /v1-smoke-hardcoded-catalog in guild %d",
             self.user,
             self.user.id if self.user else None,
             self._guild_id,
