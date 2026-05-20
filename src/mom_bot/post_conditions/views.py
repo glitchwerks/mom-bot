@@ -22,6 +22,7 @@ from mom_bot.post_conditions.discord_display import short_label
 from mom_bot.post_conditions.grid_layout import GridPage, split_by_meta_group
 
 __all__ = [
+    "build_grouped_embed",
     "build_summary_embed",
     "PostConditionsGridView",
 ]
@@ -49,11 +50,109 @@ _TRUNCATION_SUFFIX = "… and {n} more"
 _DISCORD_VIEW_COMPONENT_LIMIT = 25
 
 
+def build_grouped_embed(
+    title: str,
+    pages: list[tuple[str, list[dict[str, Any]]]],
+    selected_ids: set[int],
+) -> discord.Embed:
+    """Build a :class:`discord.Embed` grouping conditions by meta-category.
+
+    Renders every condition whose ID appears in ``selected_ids``, grouped by
+    meta-label in ``pages`` order.  Each non-empty group gets a bold
+    ``**Meta heading**`` line; groups are separated by a blank line.  Each
+    condition line carries a type-emoji prefix followed by its canonical
+    description.
+
+    The embed description is capped at 4 096 characters.  When the rendered
+    text would exceed that limit a ``"… and N more"`` truncation marker is
+    appended and surplus lines are omitted.
+
+    Args:
+        title: The embed title string (e.g. ``"Post-condition catalog"``).
+        pages: Ordered list of ``(meta_label, [condition_dict, ...])`` tuples
+            from :func:`~mom_bot.post_conditions.grouping.group_by_meta`.
+            Determines both the iteration order and the heading text.
+        selected_ids: Set of condition IDs to render.  Pass the full set of
+            catalog IDs for an all-selected (catalog) view; pass only the
+            user's saved IDs for a per-user preferences view.
+
+    Returns:
+        A :class:`discord.Embed` ready to pass to
+        ``interaction.followup.send(embed=...)``.
+    """
+    embed = discord.Embed(title=title, color=discord.Color.blurple())
+
+    if not selected_ids or not pages:
+        embed.description = "_None selected yet._"
+        return embed
+
+    # Collect lines grouped in pages order.
+    lines: list[str] = []
+    for meta_label, conditions in pages:
+        group_lines: list[str] = []
+        for cond in conditions:
+            cid = int(cond["id"])
+            if cid in selected_ids:
+                emoji = _TYPE_EMOJI.get(str(cond.get("condition_type", "")), "")
+                prefix = f"{emoji} " if emoji else ""
+                group_lines.append(f"{prefix}{cond['description']}")
+
+        if not group_lines:
+            continue
+
+        if lines:  # not the first emitted group — add blank separator
+            lines.append("")
+
+        lines.append(f"**{meta_label}**")
+        lines.extend(group_lines)
+
+    if not lines:
+        embed.description = "_None selected yet._"
+        return embed
+
+    # Join into a single string, then enforce the 4 096-char limit.
+    description = "\n".join(lines)
+    if len(description) <= _EMBED_MAX_CHARS:
+        embed.description = description
+        return embed
+
+    # Truncate: drop lines from the end until we fit, then add suffix.
+    # Because we drop whole lines (some are headings, some are items), we
+    # compute how many *item* lines (non-bold) were dropped.
+    kept: list[str] = []
+    # Pre-count total item lines (non-heading, non-blank).
+    total_item_lines = sum(1 for ln in lines if ln and not ln.startswith("**"))
+
+    for ln in lines:
+        tentative = kept + [ln]
+        # Reserve space for the suffix.
+        suffix_len = len(_TRUNCATION_SUFFIX.format(n=total_item_lines))
+        if len("\n".join(tentative)) + 1 + suffix_len > _EMBED_MAX_CHARS:
+            break
+        kept.append(ln)
+
+    # Count how many item lines were kept.
+    kept_items = sum(1 for ln in kept if ln and not ln.startswith("**"))
+    dropped_items = total_item_lines - kept_items
+
+    # Remove any trailing heading that has no items under it.
+    while kept and kept[-1].startswith("**"):
+        kept.pop()
+
+    suffix = _TRUNCATION_SUFFIX.format(n=dropped_items)
+    embed.description = "\n".join(kept) + "\n" + suffix
+    return embed
+
+
 def build_summary_embed(
     pages: list[tuple[str, list[dict[str, Any]]]],
     selections: dict[str, set[int]],
 ) -> discord.Embed:
     """Build a discord.Embed summarising every currently-selected preference.
+
+    Thin wrapper around :func:`build_grouped_embed` that flattens the
+    meta-keyed ``selections`` dict to a single ``set[int]`` and forwards to
+    the shared rendering helper with the ``"Selected preferences"`` title.
 
     Items are grouped by meta-label, with a bold heading per non-empty group
     and one line per selected item (type-emoji prefix + full description).
@@ -73,78 +172,15 @@ def build_summary_embed(
         A :class:`discord.Embed` ready to pass to
         ``interaction.response.edit_message(embed=...)``.
     """
-    embed = discord.Embed(title="Selected preferences", color=discord.Color.blurple())
+    flat_selected: set[int] = set()
+    for ids in selections.values():
+        flat_selected.update(ids)
 
-    # Build a fast lookup: condition_id → (meta_label, description,
-    # condition_type) to avoid O(N²) scans when rendering.
-    id_to_cond: dict[int, dict[str, Any]] = {}
-    for _label, conditions in pages:
-        for cond in conditions:
-            id_to_cond[int(cond["id"])] = cond
-
-    # Collect lines grouped in META_GROUPS order (which is the pages order).
-    lines: list[str] = []
-    total_selected = sum(len(s) for s in selections.values())
-    if total_selected == 0:
-        embed.description = "_None selected yet._"
-        return embed
-
-    for meta_label, conditions in pages:
-        selected_ids = selections.get(meta_label, set())
-        if not selected_ids:
-            continue
-
-        # Build ordered list of matching conditions for this group.
-        group_lines: list[str] = []
-        for cond in conditions:
-            cid = int(cond["id"])
-            if cid in selected_ids:
-                emoji = _TYPE_EMOJI.get(str(cond.get("condition_type", "")), "")
-                prefix = f"{emoji} " if emoji else ""
-                group_lines.append(f"{prefix}{cond['description']}")
-
-        if not group_lines:
-            continue
-
-        if lines:  # not the first emitted group — add blank separator
-            lines.append("")
-
-        lines.append(f"**{meta_label}**")
-        lines.extend(group_lines)
-
-    # Join into a single string, then enforce the 4 096-char limit.
-    description = "\n".join(lines)
-    if len(description) <= _EMBED_MAX_CHARS:
-        embed.description = description
-        return embed
-
-    # Truncate: drop lines from the end until we fit, then add suffix.
-    # We count remaining omitted items for the "… and N more" marker.
-    # Because we drop whole lines (some are headings, some are items), we
-    # compute how many *item* lines (non-bold) were dropped.
-    kept: list[str] = []
-    dropped_items = 0
-    # Pre-count total item lines (non-heading).
-    total_item_lines = sum(1 for ln in lines if not ln.startswith("**"))
-
-    for ln in lines:
-        tentative = kept + [ln]
-        # Reserve space for the suffix.
-        suffix_len = len(_TRUNCATION_SUFFIX.format(n=total_item_lines))
-        if len("\n".join(tentative)) + 1 + suffix_len > _EMBED_MAX_CHARS:
-            break
-        kept.append(ln)
-
-    # Count how many item lines were dropped.
-    kept_items = sum(1 for ln in kept if not ln.startswith("**"))
-    dropped_items = total_item_lines - kept_items
-
-    # Remove any trailing heading that has no items under it.
-    while kept and kept[-1].startswith("**"):
-        kept.pop()
-
-    suffix = _TRUNCATION_SUFFIX.format(n=dropped_items)
-    embed.description = "\n".join(kept) + "\n" + suffix
+    embed = build_grouped_embed(
+        title="Selected preferences",
+        pages=pages,
+        selected_ids=flat_selected,
+    )
     return embed
 
 

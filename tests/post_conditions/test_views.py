@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from mom_bot.post_conditions.views import build_summary_embed
+from mom_bot.post_conditions.views import build_grouped_embed, build_summary_embed
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -171,6 +171,134 @@ def test_build_summary_embed_overflow_truncates() -> None:
     assert len(embed.description) <= 4096
     # Truncation marker must appear somewhere in the description.
     assert "more" in embed.description
+
+
+# ---------------------------------------------------------------------------
+# build_grouped_embed — unit tests for the new shared helper
+# ---------------------------------------------------------------------------
+
+
+def test_build_grouped_embed_empty_pages_returns_empty_state_embed() -> None:
+    """Empty pages list → embed description is the empty-state message."""
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=[],
+        selected_ids=set(),
+    )
+    assert isinstance(embed, discord.Embed)
+    assert embed.title == "Post-condition catalog"
+    assert embed.description is not None
+    assert "_None selected yet._" in embed.description
+
+
+def test_build_grouped_embed_all_selected_single_group() -> None:
+    """One group with all IDs in selected_ids → bold heading + emoji lines."""
+    pages: list[tuple[str, list[dict[str, Any]]]] = [
+        (
+            "Faction & League",
+            [
+                {
+                    "id": 1,
+                    "description": "Only Barbarian Champions.",
+                    "condition_type": "faction",
+                },
+                {
+                    "id": 2,
+                    "description": "Only Telerian League Champions.",
+                    "condition_type": "league",
+                },
+            ],
+        )
+    ]
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=pages,
+        selected_ids={1, 2},
+    )
+    assert embed.title == "Post-condition catalog"
+    assert embed.description is not None
+    assert "**Faction & League**" in embed.description
+    assert "Only Barbarian Champions." in embed.description
+    assert "Only Telerian League Champions." in embed.description
+    # Type emoji for faction should be present.
+    assert "⚔️" in embed.description
+
+
+def test_build_grouped_embed_multiple_groups_blank_line_separator() -> None:
+    """Two non-empty groups → blank-line separator between them."""
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=_PAGES,
+        selected_ids={1, 2, 3, 4, 5},
+    )
+    assert embed.description is not None
+    assert "\n\n**Role, Affinity, Rarity**" in embed.description
+    assert "\n\n**Effects & Other**" in embed.description
+    assert not embed.description.endswith("\n")
+
+
+def test_build_grouped_embed_subset_of_ids_only_shows_selected() -> None:
+    """Only condition IDs in selected_ids appear in the embed."""
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=_PAGES,
+        selected_ids={1},
+    )
+    assert embed.description is not None
+    assert "Only Barbarian Champions." in embed.description
+    assert "Only Telerian League Champions." not in embed.description
+
+
+def test_build_grouped_embed_truncates_at_4096_chars() -> None:
+    """Descriptions exceeding 4096 chars are truncated with a 'more' suffix."""
+    big_pages: list[tuple[str, list[dict[str, Any]]]] = [
+        (
+            "Faction & League",
+            [
+                {
+                    "id": i,
+                    "description": "B" * 90,
+                    "condition_type": "faction",
+                }
+                for i in range(1, 101)
+            ],
+        ),
+    ]
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=big_pages,
+        selected_ids=set(range(1, 101)),
+    )
+    assert embed.description is not None
+    assert len(embed.description) <= 4096
+    assert "more" in embed.description
+
+
+def test_build_grouped_embed_title_is_set_correctly() -> None:
+    """The title kwarg is reflected in the returned embed's title."""
+    embed = build_grouped_embed(
+        title="Your post-condition preferences",
+        pages=_PAGES,
+        selected_ids={3},
+    )
+    assert embed.title == "Your post-condition preferences"
+
+
+def test_build_summary_embed_is_wrapper_around_grouped_embed() -> None:
+    """build_summary_embed still works and delegates to build_grouped_embed.
+
+    Regression guard: the existing API contract must remain intact so that
+    PostConditionsGridView and all existing callers are unaffected.
+    """
+    selections: dict[str, set[int]] = {
+        "Faction & League": {1},
+        "Role, Affinity, Rarity": {3},
+        "Effects & Other": set(),
+    }
+    embed = build_summary_embed(_PAGES, selections)
+    assert isinstance(embed, discord.Embed)
+    assert "**Faction & League**" in (embed.description or "")
+    assert "**Role, Affinity, Rarity**" in (embed.description or "")
 
 
 # ---------------------------------------------------------------------------

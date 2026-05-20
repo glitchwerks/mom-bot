@@ -29,7 +29,6 @@ the command tree::
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import discord
 import discord.app_commands
@@ -40,7 +39,7 @@ from mom_bot.post_conditions.client import (
     SiegeWebNotFoundError,
 )
 from mom_bot.post_conditions.grouping import group_by_meta
-from mom_bot.post_conditions.views import PostConditionsGridView
+from mom_bot.post_conditions.views import PostConditionsGridView, build_grouped_embed
 
 __all__ = [
     "post_conditions_catalog",
@@ -62,33 +61,6 @@ _OPS_ERROR_MSG = "An internal error occurred while contacting siege-web. " "Plea
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _format_catalog(
-    conditions: list[dict[str, Any]],
-) -> str:
-    """Format a list of conditions as a grouped, human-readable string.
-
-    Groups conditions by meta-category in :data:`META_GROUPS` order and
-    renders each group as a Markdown section with a bullet list.
-
-    Args:
-        conditions: PostConditionResponse dicts to format.
-
-    Returns:
-        A Markdown-formatted string suitable for an ephemeral Discord message.
-    """
-    groups = group_by_meta(conditions)
-    if not groups:
-        return "No post-conditions found."
-
-    lines: list[str] = []
-    for meta_label, conds in groups:
-        lines.append(f"**{meta_label}**")
-        for cond in conds:
-            lines.append(f"- {cond['description']}")
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +92,18 @@ async def post_conditions_catalog(
         await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
-    content = _format_catalog(catalog)
-    await interaction.followup.send(content, ephemeral=True)
+    if not catalog:
+        await interaction.followup.send("No post-conditions found.", ephemeral=True)
+        return
+
+    pages = group_by_meta(catalog)
+    selected_ids = {int(c["id"]) for c in catalog}
+    embed = build_grouped_embed(
+        title="Post-condition catalog",
+        pages=pages,
+        selected_ids=selected_ids,
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def post_conditions_get(
@@ -171,8 +153,14 @@ async def post_conditions_get(
         )
         return
 
-    content = _format_catalog(prefs)
-    await interaction.followup.send(content, ephemeral=True)
+    pages = group_by_meta(prefs)
+    selected_ids = {int(p["id"]) for p in prefs}
+    embed = build_grouped_embed(
+        title="Your post-condition preferences",
+        pages=pages,
+        selected_ids=selected_ids,
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 async def post_conditions_set(

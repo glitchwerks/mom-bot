@@ -134,16 +134,18 @@ async def test_catalog_command_sends_ephemeral_reply() -> None:
 
 @pytest.mark.asyncio
 async def test_catalog_command_groups_by_meta() -> None:
-    """/post-conditions output contains meta-group headings."""
+    """/post-conditions embed description contains meta-group headings."""
     interaction = _make_interaction()
     siege_client = _make_client(catalog=_CATALOG)
 
     await post_conditions_catalog(interaction, siege_client=siege_client)
 
-    call_args = interaction.followup.send.call_args
-    content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
+    call_kwargs = interaction.followup.send.call_args[1]
+    embed: discord.Embed = call_kwargs.get("embed")
+    assert embed is not None, "catalog command must send embed="
+    desc = embed.description or ""
     # Should contain role → Role, Affinity, Rarity and faction → Faction & League
-    assert "Role, Affinity, Rarity" in content or "Faction & League" in content
+    assert "Role, Affinity, Rarity" in desc or "Faction & League" in desc
 
 
 @pytest.mark.asyncio
@@ -454,3 +456,125 @@ async def test_set_command_attaches_real_grid_view() -> None:
 
     call_kwargs = interaction.followup.send.call_args[1]
     assert isinstance(call_kwargs["view"], PostConditionsGridView)
+
+
+# ---------------------------------------------------------------------------
+# /post-conditions (catalog) — embed format (post #149 migration)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_catalog_command_sends_embed_not_string() -> None:
+    """/post-conditions sends a discord.Embed, not a plain-text string."""
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG)
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
+    assert isinstance(
+        call_kwargs.get("embed"), discord.Embed
+    ), "catalog command must send embed= not a positional string"
+
+
+@pytest.mark.asyncio
+async def test_catalog_command_embed_contains_meta_headings() -> None:
+    """/post-conditions embed description has bold meta-group headings."""
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG)
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    embed: discord.Embed = interaction.followup.send.call_args[1]["embed"]
+    desc = embed.description or ""
+    # _CATALOG has role → Role, Affinity, Rarity and faction → Faction & League
+    assert "**Role, Affinity, Rarity**" in desc or "**Faction & League**" in desc
+
+
+@pytest.mark.asyncio
+async def test_catalog_command_embed_shows_all_conditions() -> None:
+    """/post-conditions embed renders every catalog entry (all-selected semantics)."""
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG)
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    embed: discord.Embed = interaction.followup.send.call_args[1]["embed"]
+    desc = embed.description or ""
+    for cond in _CATALOG:
+        assert (
+            cond["description"] in desc
+        ), f"catalog embed missing condition: {cond['description']!r}"
+
+
+@pytest.mark.asyncio
+async def test_catalog_command_empty_catalog_sends_text_message() -> None:
+    """/post-conditions with empty catalog sends a plain text no-conditions message."""
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=[])
+
+    await post_conditions_catalog(interaction, siege_client=siege_client)
+
+    # Should NOT send an embed; instead a plain content string.
+    call_kwargs = interaction.followup.send.call_args[1]
+    has_embed = isinstance(call_kwargs.get("embed"), discord.Embed)
+    content = call_kwargs.get("content", "") or (
+        interaction.followup.send.call_args[0][0] if interaction.followup.send.call_args[0] else ""
+    )
+    assert (
+        not has_embed or "no post-conditions" in (content or "").lower()
+    ), "empty catalog path must use a plain text message, not an embed"
+
+
+# ---------------------------------------------------------------------------
+# /post-conditions-get (per-user prefs) — embed format (post #149 migration)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_command_sends_embed_when_prefs_exist() -> None:
+    """/post-conditions-get sends a discord.Embed when the user has preferences."""
+    interaction = _make_interaction()
+    siege_client = _make_client(prefs=_PREFS)
+
+    await post_conditions_get(interaction, siege_client=siege_client)
+
+    call_kwargs = interaction.followup.send.call_args[1]
+    assert isinstance(
+        call_kwargs.get("embed"), discord.Embed
+    ), "get command must send embed= when prefs exist"
+
+
+@pytest.mark.asyncio
+async def test_get_command_embed_contains_only_user_prefs() -> None:
+    """/post-conditions-get embed contains only the user's prefs, not full catalog."""
+    # _PREFS has id=5 (role); give the client a broader catalog to be sure.
+    interaction = _make_interaction()
+    siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
+
+    await post_conditions_get(interaction, siege_client=siege_client)
+
+    embed: discord.Embed = interaction.followup.send.call_args[1]["embed"]
+    desc = embed.description or ""
+    # id=5 description should be present.
+    assert _PREFS[0]["description"] in desc
+    # id=12 (in catalog but NOT in prefs) should be absent.
+    pref_ids = {p["id"] for p in _PREFS}
+    for cond in _CATALOG:
+        if cond["id"] not in pref_ids:
+            assert (
+                cond["description"] not in desc
+            ), f"get embed must not show non-pref condition: {cond['description']!r}"
+
+
+@pytest.mark.asyncio
+async def test_get_command_embed_title_is_preferences() -> None:
+    """/post-conditions-get embed title references user preferences."""
+    interaction = _make_interaction()
+    siege_client = _make_client(prefs=_PREFS)
+
+    await post_conditions_get(interaction, siege_client=siege_client)
+
+    embed: discord.Embed = interaction.followup.send.call_args[1]["embed"]
+    assert embed.title is not None
+    assert "preference" in embed.title.lower()
