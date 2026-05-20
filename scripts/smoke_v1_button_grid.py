@@ -1,6 +1,6 @@
 """Phase 0 smoke for issue #145 V1 button-grid path.
 
-Registers four slash commands on the dev guild:
+Registers five slash commands on the dev guild:
 
 ``/v1-smoke``
     Responds ephemerally with a :class:`discord.ui.View` carrying 20 toggle
@@ -41,6 +41,15 @@ Registers four slash commands on the dev guild:
     the view synchronously from :data:`_HARDCODED_CATALOG` and sends it via
     :meth:`~discord.Webhook.send` (followup).
 
+``/v1-smoke-short-labels``
+    Combined design A/B: shortened button labels **and** per-meta-group
+    pagination.  Each of the three ``META_GROUPS`` becomes its own page
+    (page 0 = Faction & League, page 1 = Role/Affinity/Rarity, page 2 =
+    Effects & Other).  The meta-group name surfaces in the embed title
+    rather than as a button, keeping button labels short (~16 chars max).
+    Lets the user visually compare against ``/v1-smoke-hardcoded-catalog``
+    (raw labels) before committing to the Phase 1 design.
+
 Run::
 
     .venv/Scripts/python.exe scripts/smoke_v1_button_grid.py
@@ -79,6 +88,19 @@ Confirms (verify manually in the dev guild):
       0 (navigate back first).  Embed shows both meta-group headings each
       appearing **exactly once** (B1 regression guard with real data).
   16. Save logs selected condition ids + labels across both pages.
+  17. ``/v1-smoke-short-labels`` defers, then renders page 0 (Faction &
+      League, 19 toggles + 4 nav).  Embed title is ``Editing — Faction &
+      League (page 1/3)``.  Buttons display short labels
+      (e.g. ``Telerian League``, not the full sentence).  Three buttons
+      are pre-styled ``success``: one per meta-group (first faction, first
+      role, first effect).
+  18. Click Next.  Page 1 renders Role/Affinity/Rarity (11 toggles + 4 nav).
+      Embed title updates.  Prev is enabled; Next is enabled.
+  19. Click Next again.  Page 2 renders Effects & Other (6 toggles + 4 nav).
+      Next is disabled, Prev is enabled.
+  20. Embed description shows all staged selections across all 3 pages with
+      short labels under each meta-group heading (each heading once only).
+  21. Save logs selected ids + short labels.  Cancel dismisses the message.
 """
 
 from __future__ import annotations
@@ -905,6 +927,87 @@ assert (
     max(len(str(c["label"])) for c in _HARDCODED_CATALOG) <= 80
 ), "A label in _HARDCODED_CATALOG exceeds Discord's 80-char button limit."
 
+# ---------------------------------------------------------------------------
+# Shortened label table for /v1-smoke-short-labels
+#
+# Maps each raw catalog label string → a compact Discord button label.
+# Phase 0 only — this dict will migrate to
+# src/mom_bot/post_conditions/discord_display.py in Phase 1.
+# ---------------------------------------------------------------------------
+
+_SHORT_LABELS: dict[str, str] = {
+    # --- Faction & League ---
+    "Only Champions from the Telerian League can be used.": (
+        "Telerian League"
+    ),
+    "Only Champions from the Gaellen Pact can be used.": (
+        "Gaellen Pact"
+    ),
+    "Only Champions from The Corrupted can be used.": (
+        "The Corrupted"
+    ),
+    "Only Champions from the Nyresan Union can be used.": (
+        "Nyresan Union"
+    ),
+    "Only Banner Lord Champions can be used.": "Banner Lords",
+    "Only High Elves Champions can be used.": "High Elves",
+    "Only Sacred Order Champions can be used.": "Sacred Order",
+    "Only Barbarian Champions can be used.": "Barbarians",
+    "Only Ogryn Tribe Champions can be used.": "Ogryn Tribe",
+    "Only Lizardmen Champions can be used.": "Lizardmen",
+    "Only Skinwalker Champions can be used.": "Skinwalkers",
+    "Only Orc Champions can be used.": "Orcs",
+    "Only Demonspawn Champions can be used.": "Demonspawn",
+    "Only Undead Horde Champions can be used.": "Undead Horde",
+    "Only Dark Elves Champions can be used.": "Dark Elves",
+    "Only Knights Revenant Champions can be used.": "Knights Revenant",
+    "Only Dwarves Champions can be used.": "Dwarves",
+    "Only Shadowkin Champions can be used.": "Shadowkin",
+    "Only Sylvan Watcher Champions can be used.": "Sylvan Watchers",
+    # --- Role, Affinity, Rarity ---
+    "Only HP Champions can be used.": "HP",
+    "Only DEF Champions can be used.": "DEF",
+    "Only Support Champions can be used.": "Support",
+    "Only ATK Champions can be used.": "ATK",
+    "Only Void Champions can be used.": "Void",
+    "Only Force Champions can be used.": "Force",
+    "Only Magic Champions can be used.": "Magic",
+    "Only Spirit Champions can be used.": "Spirit",
+    "Only Legendary Champions can be used.": "Legendary",
+    "Only Epic Champions can be used.": "Epic",
+    "Only Rare Champions can be used.": "Rare",
+    # --- Effects & Other ---
+    "All Champions are immune to Turn Meter reduction effects.": (
+        "Immune: TM reduction"
+    ),
+    "All Champions are immune to Turn Meter fill effects.": (
+        "Immune: TM fill"
+    ),
+    "All Champions are immune to cooldown increasing effects.": (
+        "Immune: CD increase"
+    ),
+    "All Champions are immune to cooldown decreasing effects.": (
+        "Immune: CD decrease"
+    ),
+    "All Champions are immune to [Sheep] debuffs.": "Immune: [Sheep]",
+    "Champions cannot be revived.": "No revives",
+}
+
+# Every raw label in _HARDCODED_CATALOG must have a short-label mapping.
+# Fails at import time if a new catalog entry is added without a mapping.
+assert all(
+    c["label"] in _SHORT_LABELS for c in _HARDCODED_CATALOG
+), (
+    "One or more _HARDCODED_CATALOG labels are missing from _SHORT_LABELS. "
+    "Add the mapping before proceeding."
+)
+
+# Short labels must fit within Discord's button-label cap (80 chars).
+# 25 chars is the practical visual budget for this smoke variant.
+assert max(len(s) for s in _SHORT_LABELS.values()) <= 25, (
+    "A short label in _SHORT_LABELS exceeds the 25-char visual budget."
+)
+
 # Canonical sort order for the hardcoded catalog.  Mirrors _META_ORDER but
 # built here from META_GROUPS so both sections stay in sync.
 _HC_META_ORDER: dict[str, int] = {
@@ -1298,6 +1401,413 @@ class HardcodedCatalogSmokeView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# /v1-smoke-short-labels — per-meta-group pagination + short button labels
+#
+# Three pages, one per META_GROUPS entry:
+#   Page 0 — "Faction & League"     (19 conditions, ids 1-19)
+#   Page 1 — "Role, Affinity, Rarity" (11 conditions, ids 20-30)
+#   Page 2 — "Effects & Other"       ( 6 conditions, ids 31-36)
+#
+# Each page fits well within the 25-component cap:
+#   19 toggles + 4 nav = 23   (page 0)
+#   11 toggles + 4 nav = 15   (page 1)
+#    6 toggles + 4 nav = 10   (page 2)
+#
+# The meta-group label surfaces as the embed *title*, not as a button row,
+# because V1 Views cannot carry top-level TextDisplay components.
+# ---------------------------------------------------------------------------
+
+# Build per-meta-group page list from _HARDCODED_CATALOG.
+# Each page is a (meta_label, list[_FakeCondition]) tuple.
+# Within each group, conditions are sorted by (condition_type, id).
+_SL_PAGES: list[tuple[str, list[_FakeCondition]]] = []
+
+_sl_meta_order_for_sort: dict[str, int] = {
+    ct: group_idx
+    for group_idx, (_lbl, types) in enumerate(META_GROUPS)
+    for ct in types
+}
+
+for _sl_meta_label, _sl_types in META_GROUPS:
+    _sl_group: list[_FakeCondition] = sorted(
+        [
+            _FakeCondition(
+                id=int(c["id"]),  # type: ignore[arg-type]
+                label=str(c["label"]),
+                condition_type=str(c["condition_type"]),
+                meta_label=str(c["meta_label"]),
+            )
+            for c in _HARDCODED_CATALOG
+            if c["meta_label"] == _sl_meta_label
+        ],
+        key=lambda fc: (fc.condition_type, fc.id),
+    )
+    if _sl_group:
+        _SL_PAGES.append((_sl_meta_label, _sl_group))
+
+assert len(_SL_PAGES) == 3, (
+    f"Expected 3 meta-group pages, got {len(_SL_PAGES)}"
+)
+assert len(_SL_PAGES[0][1]) == 19, (
+    f"Faction & League should have 19 conditions, "
+    f"got {len(_SL_PAGES[0][1])}"
+)
+assert len(_SL_PAGES[1][1]) == 11, (
+    f"Role, Affinity, Rarity should have 11 conditions, "
+    f"got {len(_SL_PAGES[1][1])}"
+)
+assert len(_SL_PAGES[2][1]) == 6, (
+    f"Effects & Other should have 6 conditions, "
+    f"got {len(_SL_PAGES[2][1])}"
+)
+
+# Pre-set 3 toggles to success deterministically — one per meta-group so
+# the cross-page summary embed shows activity on all three groups:
+#   Page 0: first condition in Faction & League
+#   Page 1: first condition in Role, Affinity, Rarity
+#   Page 2: first condition in Effects & Other
+_SL_DEFAULT_ON: frozenset[int] = frozenset(
+    {
+        _SL_PAGES[0][1][0].id,
+        _SL_PAGES[1][1][0].id,
+        _SL_PAGES[2][1][0].id,
+    }
+)
+
+_logger.info(
+    "Short-labels smoke: %d pages; default-on ids=%r",
+    len(_SL_PAGES),
+    sorted(_SL_DEFAULT_ON),
+)
+
+
+def _build_sl_summary_embed(
+    page_index: int,
+    pages: list[tuple[str, list[_FakeCondition]]],
+    selections: dict[int, bool],
+) -> discord.Embed:
+    """Build the embed for the short-labels smoke view.
+
+    The embed title carries the active page's meta-group heading.  The
+    description lists all staged selections across **all** pages, grouped
+    by meta-group (each heading rendered exactly once — B1 guard applies).
+    Short labels are used throughout.
+
+    Args:
+        page_index: Zero-based index of the currently displayed page.
+        pages: The full ``(meta_label, conditions)`` page list.
+        selections: Mapping of condition id → checked state.
+
+    Returns:
+        A :class:`discord.Embed` with title set to the active meta-group
+        heading and description listing all staged selections with short
+        labels, or ``"(none selected)"`` if nothing is selected.
+    """
+    active_meta, _ = pages[page_index]
+    total = len(pages)
+    title = f"Editing — {active_meta} (page {page_index + 1}/{total})"
+
+    # Build the cross-page summary using short labels.  Walk all pages so
+    # every condition is visited once; bucket by meta_label for the heading
+    # (each heading rendered exactly once — B1 guard).
+    by_meta: dict[str, list[str]] = {}
+    for meta_label, conditions in pages:
+        for cond in conditions:
+            if not selections.get(cond.id, False):
+                continue
+            short = _SHORT_LABELS.get(cond.label, cond.label)
+            by_meta.setdefault(meta_label, []).append(short)
+
+    if not by_meta:
+        description = "(none selected)"
+    else:
+        lines: list[str] = []
+        for meta_label, short_labels in by_meta.items():
+            lines.append(f"**{meta_label}**")
+            lines.append(", ".join(short_labels))
+        description = "\n".join(lines)
+
+    return discord.Embed(
+        title=title,
+        description=description,
+        colour=discord.Colour.green(),
+    )
+
+
+class _SlToggleButton(
+    discord.ui.Button["ShortLabelsSmokeView"]
+):
+    """Toggle button for the short-labels smoke view.
+
+    Uses the entry from :data:`_SHORT_LABELS` as the button label so each
+    button is compact (≤ 25 chars) while the full canonical label is
+    preserved in :attr:`_condition_label` for logging.
+
+    Attributes:
+        _condition_id: Condition id keyed into
+            :attr:`ShortLabelsSmokeView._selections`.
+        _condition_label: The raw canonical label (for Save logging).
+    """
+
+    def __init__(
+        self,
+        *,
+        condition: _FakeCondition,
+        row: int,
+        on: bool,
+    ) -> None:
+        """Initialise a toggle button using the short label.
+
+        Args:
+            condition: The :class:`_FakeCondition` this button represents.
+            row: The Discord row (0-3) to place this button in.
+            on: Whether this button starts in the ON (``success``) state.
+        """
+        short = _SHORT_LABELS.get(condition.label, condition.label)
+        super().__init__(
+            style=ButtonStyle.success if on else ButtonStyle.secondary,
+            label=short,
+            row=row,
+            custom_id=f"sl-toggle-{condition.id}",
+        )
+        self._condition_id: int = condition.id
+        self._condition_label: str = condition.label
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Flip selection state, rebuild components, and edit the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        assert view is not None, (
+            "view must be set by discord.py before callback"
+        )
+        view._selections[self._condition_id] = not view._selections.get(
+            self._condition_id, False
+        )
+        view._render()
+        embed = _build_sl_summary_embed(
+            view._page_index, _SL_PAGES, view._selections
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _SlNavButton(
+    discord.ui.Button["ShortLabelsSmokeView"]
+):
+    """Prev / Next page navigation for the short-labels smoke view.
+
+    Changes ``_page_index`` on the parent view, re-renders the components
+    for the new page, and edits the message with the updated embed title.
+    Selections persist across page changes.
+
+    Attributes:
+        _direction: Either ``"prev"`` or ``"next"``.
+    """
+
+    def __init__(self, *, direction: str, disabled: bool) -> None:
+        """Initialise a nav button.
+
+        Args:
+            direction: ``"prev"`` or ``"next"``.
+            disabled: Whether the button starts disabled (True for Prev
+                on page 0, True for Next on the last page).
+        """
+        assert direction in ("prev", "next"), (
+            f"direction must be 'prev' or 'next', got {direction!r}"
+        )
+        super().__init__(
+            style=ButtonStyle.secondary,
+            label="Prev" if direction == "prev" else "Next",
+            row=4,
+            disabled=disabled,
+            custom_id=f"sl-nav-{direction}",
+        )
+        self._direction: str = direction
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Change the page index, rebuild components, and edit the message.
+
+        The embed title updates to reflect the new active meta-group.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        assert view is not None, (
+            "view must be set by discord.py before callback"
+        )
+        if self._direction == "prev" and view._page_index > 0:
+            view._page_index -= 1
+        elif (
+            self._direction == "next"
+            and view._page_index < len(_SL_PAGES) - 1
+        ):
+            view._page_index += 1
+        view._render()
+        embed = _build_sl_summary_embed(
+            view._page_index, _SL_PAGES, view._selections
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _SlSaveButton(
+    discord.ui.Button["ShortLabelsSmokeView"]
+):
+    """Save button for the short-labels smoke view.
+
+    Logs all selected condition ids and their short labels across all
+    pages, then strips the view from the message.
+    """
+
+    def __init__(self) -> None:
+        """Initialise the Save button with primary style."""
+        super().__init__(
+            style=ButtonStyle.primary,
+            label="Save",
+            row=4,
+            custom_id="sl-save",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Log staged selections (id + short label) and acknowledge.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        view = self.view
+        selected: list[tuple[int, str]] = []
+        if view is not None:
+            # Build id → (raw_label, short_label) from all pages.
+            id_to_labels: dict[int, tuple[str, str]] = {
+                cond.id: (
+                    cond.label,
+                    _SHORT_LABELS.get(cond.label, cond.label),
+                )
+                for _meta, conditions in _SL_PAGES
+                for cond in conditions
+            }
+            selected = [
+                (cid, id_to_labels.get(cid, ("?", "?"))[1])
+                for cid, on in sorted(view._selections.items())
+                if on
+            ]
+        _logger.info(
+            "v1-smoke-short-labels save: selected=%r", selected
+        )
+        await interaction.response.edit_message(
+            content="ack", view=None, embed=None
+        )
+
+
+class _SlCancelButton(
+    discord.ui.Button["ShortLabelsSmokeView"]
+):
+    """Cancel button for the short-labels smoke view."""
+
+    def __init__(self) -> None:
+        """Initialise the Cancel button with danger style."""
+        super().__init__(
+            style=ButtonStyle.danger,
+            label="Cancel",
+            row=4,
+            custom_id="sl-cancel",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Log cancel intent and dismiss the message.
+
+        Args:
+            interaction: The button-press interaction from Discord.
+        """
+        _logger.info("v1-smoke-short-labels cancel")
+        await interaction.response.edit_message(
+            content="cancelled", view=None, embed=None
+        )
+
+
+class ShortLabelsSmokeView(discord.ui.View):
+    """Multipage :class:`discord.ui.View` for ``/v1-smoke-short-labels``.
+
+    One page per ``META_GROUPS`` entry.  Each page renders only its own
+    meta-group's conditions; the meta-group label moves to the embed title
+    rather than appearing on a button or TextDisplay (both of which are not
+    available in the V1 view path).  Button labels come from
+    :data:`_SHORT_LABELS` (≤ 25 chars), reducing label-width pressure on
+    Discord's button row layout.
+
+    Holds full cross-page selection state in :attr:`_selections`.  Re-renders
+    components on every toggle or nav click via :meth:`_render`.
+
+    Component counts per page (all within the 25-component cap):
+
+    - Page 0 — Faction & League:       19 toggles + 4 nav = 23
+    - Page 1 — Role, Affinity, Rarity: 11 toggles + 4 nav = 15
+    - Page 2 — Effects & Other:         6 toggles + 4 nav = 10
+
+    Attributes:
+        _pages: The ``(meta_label, conditions)`` page list from
+            :data:`_SL_PAGES`.
+        _page_index: Zero-based index of the currently displayed page.
+        _selections: Mapping of condition id → checked state across all
+            pages.  Persists across page navigation.
+        timeout: View expiry in seconds (300 — five minutes).
+    """
+
+    def __init__(self) -> None:
+        """Construct the view, seed default selections, and render page 0."""
+        super().__init__(timeout=300)
+        self._pages: list[tuple[str, list[_FakeCondition]]] = _SL_PAGES
+        self._page_index: int = 0
+        self._selections: dict[int, bool] = {
+            cond.id: (cond.id in _SL_DEFAULT_ON)
+            for _meta, conditions in _SL_PAGES
+            for cond in conditions
+        }
+        self._render()
+
+    def _render(self) -> None:
+        """Rebuild all view children for the current ``_page_index``.
+
+        Clears existing items, then adds:
+
+        - One :class:`_SlToggleButton` per condition on the current page,
+          arranged into rows 0-3 (5 buttons per row).
+        - One :class:`_SlNavButton` for Prev (disabled on page 0).
+        - One :class:`_SlSaveButton`.
+        - One :class:`_SlCancelButton`.
+        - One :class:`_SlNavButton` for Next (disabled on last page).
+        """
+        self.clear_items()
+        _meta_label, conditions = self._pages[self._page_index]
+        for idx, cond in enumerate(conditions):
+            self.add_item(
+                _SlToggleButton(
+                    condition=cond,
+                    row=idx // 5,
+                    on=self._selections.get(cond.id, False),
+                )
+            )
+
+        last_page = len(self._pages) - 1
+        self.add_item(
+            _SlNavButton(
+                direction="prev",
+                disabled=(self._page_index == 0),
+            )
+        )
+        self.add_item(_SlSaveButton())
+        self.add_item(_SlCancelButton())
+        self.add_item(
+            _SlNavButton(
+                direction="next",
+                disabled=(self._page_index >= last_page),
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
 # /v1-smoke-real-catalog — single-page real label-width smoke
 # ---------------------------------------------------------------------------
 
@@ -1542,7 +2052,7 @@ class RealCatalogSmokeView(discord.ui.View):
 class SmokeBot(discord.Client):
     """Minimal :class:`discord.Client` for the Phase 0 V1 button-grid smoke.
 
-    Registers four guild-scoped slash commands on ``setup_hook``:
+    Registers five guild-scoped slash commands on ``setup_hook``:
 
     - ``/v1-smoke`` — single-page toggle grid.
     - ``/v1-grid-smoke-multipage`` — two-page persistence and B1 regression
@@ -1551,8 +2061,10 @@ class SmokeBot(discord.Client):
       siege-web catalog.
     - ``/v1-smoke-hardcoded-catalog`` — real-label multipage smoke using
       a hardcoded mirror of the production catalog (no siege-web required).
+    - ``/v1-smoke-short-labels`` — combined design A/B: shortened button
+      labels + per-meta-group pagination (3 pages, one per META_GROUP).
 
-    All four commands can coexist with earlier V2 smoke commands in the
+    All five commands can coexist with earlier V2 smoke commands in the
     same dev guild because they use distinct names.
 
     Attributes:
@@ -1570,7 +2082,7 @@ class SmokeBot(discord.Client):
         self._guild_id: int = int(load_secret("guild-id"))
 
     async def setup_hook(self) -> None:
-        """Register and sync all four smoke commands to the dev guild.
+        """Register and sync all five smoke commands to the dev guild.
 
         Called by discord.py after login, before the gateway connects.
         All commands are registered as guild-scoped so they appear in the
@@ -1803,11 +2315,86 @@ class SmokeBot(discord.Client):
                 embed=embed, view=view, ephemeral=True
             )
 
+        @self.tree.command(
+            name="v1-smoke-short-labels",
+            description=(
+                "Phase 0 smoke — short labels + per-meta-group pages"
+                " (A/B vs hardcoded-catalog)"
+            ),
+            guild=guild,
+        )
+        async def v1_smoke_short_labels(
+            interaction: discord.Interaction,
+        ) -> None:
+            """Respond to ``/v1-smoke-short-labels``.
+
+            Defers immediately (mirrors the production defer path), then
+            constructs a :class:`ShortLabelsSmokeView` with 3 pages (one
+            per ``META_GROUPS`` entry) and sends the initial page-0 view
+            plus the summary embed via followup.
+
+            The embed title shows the active meta-group name and page
+            number.  Button labels are taken from :data:`_SHORT_LABELS`
+            (≤ 25 chars) rather than the full canonical sentence.
+
+            Three conditions are pre-selected (one per meta-group) so the
+            cross-page summary embed is populated from the first render.
+
+            Args:
+                interaction: The slash-command interaction from Discord.
+            """
+            _logger.info(
+                "smoke: /v1-smoke-short-labels invoked by %s (id=%s)",
+                interaction.user,
+                interaction.user.id,
+            )
+            # Defer immediately — mirrors the production interaction
+            # lifecycle even though view construction is synchronous.
+            await interaction.response.defer(ephemeral=True)
+
+            try:
+                view = ShortLabelsSmokeView()
+                embed = _build_sl_summary_embed(
+                    view._page_index, _SL_PAGES, view._selections
+                )
+            except Exception as exc:
+                _logger.exception(
+                    "Failed to construct ShortLabelsSmokeView"
+                )
+                await interaction.followup.send(
+                    f"Construction error: {exc!r}",
+                    ephemeral=True,
+                )
+                return
+
+            _logger.info(
+                "v1-smoke-short-labels: %d pages; default-on=%r;"
+                " page-0 has %d conditions",
+                len(_SL_PAGES),
+                sorted(_SL_DEFAULT_ON),
+                len(_SL_PAGES[0][1]),
+            )
+            for pg_idx, (ml, conds) in enumerate(_SL_PAGES):
+                _logger.info(
+                    "  page %d — %s (%d conditions): %s",
+                    pg_idx,
+                    ml,
+                    len(conds),
+                    [
+                        _SHORT_LABELS.get(c.label, c.label)
+                        for c in conds
+                    ],
+                )
+
+            await interaction.followup.send(
+                embed=embed, view=view, ephemeral=True
+            )
+
         await self.tree.sync(guild=guild)
         _logger.info(
             "Synced /v1-smoke, /v1-grid-smoke-multipage,"
-            " /v1-smoke-real-catalog, and"
-            " /v1-smoke-hardcoded-catalog to guild %d",
+            " /v1-smoke-real-catalog, /v1-smoke-hardcoded-catalog, and"
+            " /v1-smoke-short-labels to guild %d",
             self._guild_id,
         )
 
@@ -1818,8 +2405,9 @@ class SmokeBot(discord.Client):
         """
         _logger.info(
             "Smoke bot ready: %s (id=%s) — invoke /v1-smoke,"
-            " /v1-grid-smoke-multipage, /v1-smoke-real-catalog, or"
-            " /v1-smoke-hardcoded-catalog in guild %d",
+            " /v1-grid-smoke-multipage, /v1-smoke-real-catalog,"
+            " /v1-smoke-hardcoded-catalog, or"
+            " /v1-smoke-short-labels in guild %d",
             self.user,
             self.user.id if self.user else None,
             self._guild_id,
