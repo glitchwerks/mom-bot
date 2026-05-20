@@ -255,9 +255,14 @@ from pathlib import Path
 # caller is using a different checkout's interpreter (e.g. the parent
 # worktree's .venv/Scripts/python.exe). Raise loudly rather than silently
 # smoke-testing the wrong source.
+#
+# DO NOT add `sys.path.insert(0, str(_REPO_ROOT / "src"))` — it would defeat
+# the tripwire by letting `mom_bot` resolve via raw path even from the wrong
+# venv. The editable install in `.venv/` does the discovery; the tripwire
+# fires only if the active interpreter is the wrong one. Mirrors
+# scripts/smoke_v2_checkbox_in_container.py (commit 4e5f74a) verbatim.
 # ------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 import mom_bot  # noqa: E402
 
@@ -288,16 +293,35 @@ Expected: bot logs in, registers `/v1-smoke`, idles awaiting interaction.
 
 - [ ] **Step 3: Invoke `/v1-smoke` in the dev guild.** Confirm all six items from the docstring. Click at least 10 toggles, varied rows. Confirm no Discord 400 in bot stderr.
 
-- [ ] **Step 4: Post smoke result to issue #145.** Use a comment with either a screenshot of the rendered ephemeral or a copy-paste of the bot log showing the selected set. Body must include the keyword `smoke verified` so the Phase 5 PR-body checkbox can verify it via `gh issue view 145 --comments`.
+- [ ] **Step 3b: Add `/v1-grid-smoke-multipage` to the same smoke script.**
+
+The single-page `/v1-smoke` above only exercises 20 toggles in a single page — the double-label sub-pagination bug (B1), Prev/Next navigation, and selection-persistence-across-pages all escape it. Add a second `app_commands.Command` named `v1-grid-smoke-multipage` in the same script that:
+
+  - Constructs 25 fake conditions split across two `GridPage`s (page 1: 20 toggles labelled `"opt-0".."opt-19"`, page 2: 5 toggles labelled `"opt-20".."opt-24"`).
+  - Uses a minimal View subclass that holds `_pages`, `_page_index`, and `_selections: dict[int, bool]`. Page 1 starts active.
+  - Renders the 20 toggles for the active page + Prev/Save/Cancel/Next nav (Prev disabled on page 0, Next disabled on last).
+  - Toggle callbacks flip the bool in `_selections`, rebuild components for the active page, and call `edit_message(embed=..., view=self)`. The embed must show **all** staged selections across both pages, with the meta-group heading rendered **exactly once** (regression guard for B1).
+  - Next/Prev callbacks change `_page_index`, rebuild, and re-render.
+
+Confirm in the dev guild (expand the docstring checklist to ~10 items):
+
+  1-6. As above for the single-page smoke.
+  7. `/v1-grid-smoke-multipage` renders 24 components (20 toggle + 4 nav). Prev is disabled, Next enabled.
+  8. Toggle three on page 1 (e.g. opt-2, opt-7, opt-14). Embed shows three selected.
+  9. Click Next. Page 2 renders with 9 components (5 toggle + 4 nav). Next is disabled, Prev enabled. Embed still shows the three from page 1.
+  10. Toggle opt-22 and opt-24 on page 2. Embed now shows five selected, with the meta-group heading appearing **only once** (no duplicate "opt group" line).
+  11. Click Prev. Page 1 re-renders. opt-2, opt-7, opt-14 still show `success` style. Embed unchanged.
+
+- [ ] **Step 4: Post smoke result to issue #145.** Use a comment with either screenshots of both smoke invocations (`/v1-smoke` and `/v1-grid-smoke-multipage`) or a copy-paste of the bot log showing both round-trips. Body must include the keyword `smoke verified` so the Phase 5 PR-body checkbox can verify it via `gh issue view 145 --comments`. **Both single-page and multi-page results must appear in the comment before the Phase 1 PR opens.**
 
 - [ ] **Step 5: Commit the smoke script.**
 
 ```bash
 git add scripts/smoke_v1_button_grid.py
-git commit -m "feat(#145): Phase 0 V1 button-grid smoke"
+git commit -m "feat(#145): Phase 0 V1 button-grid smoke (single + multipage)"
 ```
 
-**Exit criterion:** dev-guild render confirmed, 10+ toggles processed cleanly, smoke result posted to #145. If Discord rejects any payload, stop and revise the plan.
+**Exit criterion:** dev-guild render confirmed for both `/v1-smoke` and `/v1-grid-smoke-multipage`, 10+ toggles processed cleanly across single-page and multi-page, summary embed never renders a meta-group heading more than once, smoke result posted to #145. If Discord rejects any payload, stop and revise the plan.
 
 ---
 
@@ -400,7 +424,13 @@ def split_meta_for_grid(
 
 ```python
 def test_split_meta_for_grid_groups_by_meta_in_canonical_order() -> None:
-    """Conditions split into one page per non-empty meta-group in META_GROUPS order."""
+    """Conditions split into one page per non-empty meta-group in META_GROUPS order.
+
+    Note: the expected labels below ("Faction & League", "Role, Affinity, Rarity",
+    "Effects & Other") are the source-of-truth values defined in
+    ``mom_bot.post_conditions.grouping.META_GROUPS``. If those labels are
+    renamed there, update this fixture (and the sub-pagination tests below).
+    """
     conditions = [
         {"id": 1, "condition_type": "faction", "description": "F1"},
         {"id": 2, "condition_type": "role", "description": "R1"},
@@ -576,6 +606,44 @@ class PostConditionsGridView(discord.ui.View):
 
         self._build_components()
 
+    def _summary_pages(self) -> list[tuple[str, list[dict[str, Any]]]]:
+        """Collapse `_pages` into one (base_label, conditions) tuple per meta-group.
+
+        Sub-paginated meta-groups (label like ``"Faction & League (1/2)"``) are
+        merged so the summary embed renders each meta-group heading exactly once.
+
+        Returns:
+            Ordered list of ``(base_label, conditions)`` tuples in original
+            page order, with sub-pages of the same meta-group concatenated.
+        """
+        out: list[tuple[str, list[dict[str, Any]]]] = []
+        seen: dict[str, int] = {}  # base_label → index in `out`
+        for page in self._pages:
+            base = page.label.rsplit(" (", 1)[0] if " (" in page.label else page.label
+            if base in seen:
+                out[seen[base]][1].extend(page.conditions)
+            else:
+                seen[base] = len(out)
+                out.append((base, list(page.conditions)))
+        return out
+
+    def _build_embed_for_current_page(self) -> discord.Embed:
+        """Canonical embed-build path used by initial render and every callback.
+
+        Builds the live-summary embed (always reflects *all* staged selections
+        across all pages) and overrides its title with the *current* page's
+        label so the user has page context.
+        """
+        meta_keyed = _flat_to_meta_keyed(self._selections, self._pages)
+        embed = build_summary_embed(
+            pages=self._summary_pages(),
+            selections=meta_keyed,
+        )
+        embed.title = (
+            self._pages[self._page_index].label if self._pages else "Preferences"
+        )
+        return embed
+
     def _build_components(self) -> None:
         """Clear and rebuild all buttons for the current `_page_index`."""
         self.clear_items()
@@ -607,16 +675,13 @@ class PostConditionsGridView(discord.ui.View):
         )
 
     def initial_embed(self) -> discord.Embed:
-        """Build the initial summary embed (called from commands.py)."""
-        meta_keyed = _flat_to_meta_keyed(self._selections, self._pages)
-        embed = build_summary_embed(
-            pages=[(p.label.rsplit(" (", 1)[0] if " (" in p.label else p.label,
-                    p.conditions) for p in self._pages],
-            selections=meta_keyed,
-        )
-        # Override title with current page label for context.
-        embed.title = self._pages[self._page_index].label if self._pages else "Preferences"
-        return embed
+        """Build the initial summary embed (called from commands.py).
+
+        Thin wrapper over :meth:`_build_embed_for_current_page` — both the
+        initial render and every callback go through the same canonical
+        embed-build path. No inline ``rsplit(" (", 1)[0]`` duplication.
+        """
+        return self._build_embed_for_current_page()
 
 
 class _ToggleButton(discord.ui.Button["PostConditionsGridView"]):
@@ -638,13 +703,9 @@ class _ToggleButton(discord.ui.Button["PostConditionsGridView"]):
             self._condition_id, False
         )
         view._build_components()
-        meta_keyed = _flat_to_meta_keyed(view._selections, view._pages)
-        embed = build_summary_embed(
-            pages=[(p.label.rsplit(" (", 1)[0] if " (" in p.label else p.label,
-                    p.conditions) for p in view._pages],
-            selections=meta_keyed,
-        )
-        embed.title = view._pages[view._page_index].label
+        # Canonical embed-build path — same as NavButton.callback and
+        # initial_embed(). No inline rsplit / build_summary_embed duplication.
+        embed = view._build_embed_for_current_page()
         await interaction.response.edit_message(embed=embed, view=view)
 
 
@@ -799,7 +860,58 @@ def test_grid_view_prev_disabled_on_first_page_next_disabled_on_last() -> None:
 
 - [ ] **Step 8: Run.** Expected: PASS.
 
-- [ ] **Step 9: Commit.**
+- [ ] **Step 9: Add the sub-pagination summary-embed dedup test (B1 regression guard).**
+
+This test would have caught the double-label bug where two sub-pages of the same
+meta-group caused the summary embed to render the heading + selections twice.
+
+```python
+def test_summary_pages_merges_subpaginated_meta_groups() -> None:
+    """When a meta-group spans multiple GridPages, _summary_pages collapses
+    them into one (base_label, conditions) tuple and build_summary_embed
+    renders the heading exactly once."""
+    from mom_bot.post_conditions.views import (
+        PostConditionsGridView,
+        build_summary_embed,
+        _flat_to_meta_keyed,
+    )
+
+    # 25 faction conditions → two sub-pages: "(1/2)" with 20, "(2/2)" with 5.
+    catalog = [
+        {"id": i, "condition_type": "faction", "description": f"F{i}"}
+        for i in range(25)
+    ]
+    view = PostConditionsGridView(
+        catalog=catalog, preferences=[], discord_id="x", siege_client=object()
+    )
+    # Select one id from each sub-page.
+    view._selections[3] = True   # on page (1/2)
+    view._selections[22] = True  # on page (2/2)
+
+    pages = view._summary_pages()
+    assert len(pages) == 1, (
+        f"sub-pages should merge into one tuple; got {[p[0] for p in pages]}"
+    )
+    base_label, conds = pages[0]
+    assert base_label == "Faction & League"
+    assert len(conds) == 25  # both chunks concatenated
+
+    # build_summary_embed must render the heading exactly once.
+    embed = build_summary_embed(
+        pages=pages,
+        selections=_flat_to_meta_keyed(view._selections, view._pages),
+    )
+    rendered = "\n".join(
+        [embed.title or ""] + [f.name + "\n" + f.value for f in embed.fields]
+    )
+    assert rendered.count("Faction & League") == 1, (
+        "heading rendered more than once — double-label bug regressed"
+    )
+```
+
+- [ ] **Step 10: Run.** Expected: PASS.
+
+- [ ] **Step 11: Commit.**
 
 ```bash
 git add src/mom_bot/post_conditions/views.py tests/post_conditions/test_views.py
@@ -995,7 +1107,30 @@ And update the import at the top of `commands.py`:
 from mom_bot.post_conditions.views import PostConditionsGridView
 ```
 
-- [ ] **Step 2: Update `test_commands.py`.** Replace any assertion that names `EditPreferencesView` with `PostConditionsGridView`. Drop any assertion that inspects modal-specific behavior (e.g. checking `view._modal_pages`). Keep all error-path tests (404 → link msg, AuthError → ops msg, generic Exception → ops msg). Add:
+- [ ] **Step 1b: Update the module-level import in `tests/post_conditions/test_commands.py:L25`.**
+
+This step MUST run before any test command in this phase. When Phase 4 Step 5 deletes
+`EditPreferencesView` from `views.py`, any file that still names it at import time will
+fail at IMPORT (`ImportError: cannot import name 'EditPreferencesView'`), which masks
+the TDD signal — pytest never gets to the assertions.
+
+Replace:
+
+```python
+from mom_bot.post_conditions.views import EditPreferencesView
+```
+
+with:
+
+```python
+from mom_bot.post_conditions.views import PostConditionsGridView
+```
+
+If `test_commands.py` references `EditPreferencesView` in any other context (e.g. an
+`isinstance(...)` assertion, a type hint, a patched attribute), update those references
+in this same step.
+
+- [ ] **Step 2: Update `test_commands.py` assertions.** Replace any assertion that names `EditPreferencesView` with `PostConditionsGridView`. Drop any assertion that inspects modal-specific behavior (e.g. checking `view._modal_pages`). Keep all error-path tests (404 → link msg, AuthError → ops msg, generic Exception → ops msg). Add:
 
 ```python
 @pytest.mark.asyncio
@@ -1049,12 +1184,23 @@ __all__ = [
 .venv/Scripts/python.exe -m pytest tests/post_conditions/ -v
 ```
 
-- [ ] **Step 9: Commit.**
+- [ ] **Step 9: Commit.** CLAUDE.md forbids `git add -A` — stage explicit paths only. The Phase 4 file set is deterministic; both the modifications and the deletions are listed below.
 
 ```bash
-git add -A
+git add \
+  src/mom_bot/post_conditions/commands.py \
+  src/mom_bot/post_conditions/views.py \
+  tests/post_conditions/test_commands.py \
+  tests/post_conditions/test_views.py
+# Deletions staged by `git rm` in Step 4 are already in the index:
+#   src/mom_bot/post_conditions/modal_layout.py
+#   tests/post_conditions/test_modal_layout.py
+#   tests/post_conditions/test_modal.py
 git commit -m "refactor(#145): delete modal flow; wire commands.py to grid view"
 ```
+
+Confirm the staged set with `git status` before committing — only the listed files
+plus the three `git rm`-staged deletions should appear.
 
 ---
 
@@ -1077,6 +1223,22 @@ git commit -m "refactor(#145): delete modal flow; wire commands.py to grid view"
   - No Discord 400 in bot stderr across at least 30 click interactions.
 
 - [ ] **Step 3: Post smoke result to issue #145.** Include the keyword `smoke verified` and either a screenshot or a copy-paste of the bot log showing the round-trip.
+
+- [ ] **Step 3a (conditional — Phase 5a debounce mitigation).** This step exists to land the risk-table's "client-side debounce" mitigation if smoke reveals it's needed. **Skip if the 30-click stress in Step 2 produced no 429s and no visibly delayed updates.**
+
+If toggle-mash testing produced:
+  - Any HTTP 429 in bot stderr, OR
+  - Visible UI lag (button click → embed update delay > ~500ms perceptible to the user), OR
+  - Out-of-order embed states (a stale render arriving after a fresh one),
+
+then add a client-side throttle in `_ToggleButton.callback`. Two acceptable implementations:
+
+  - **(a) `asyncio.Lock` on the view**: add `self._toggle_lock = asyncio.Lock()` in `__init__`; wrap the toggle body in `async with view._toggle_lock:`. Serialises callbacks; simplest correct fix for ordering issues.
+  - **(b) 250ms throttle**: track `self._last_toggle_at: float = 0.0` on the view; in the callback, drop any toggle arriving within 250ms of the previous one (ignore silently, do not `edit_message`). Reduces request rate; appropriate fix for 429s.
+
+Add a regression test in `test_views.py` covering whichever path is chosen. Commit on the same branch with message `feat(#145): client-side toggle debounce (smoke-driven)`.
+
+If Step 2 was clean, this step is a no-op — proceed to Step 4. The risk-table row in § 8 remains as the documented mitigation discoverable for a future regression.
 
 - [ ] **Step 4: Open the PR.**
 
@@ -1140,7 +1302,7 @@ git rm scripts/smoke_v2_checkbox_in_container.py
 |---|---|---|
 | Discord rejects the 25-component View payload (unlikely — legacy surface) | Very Low | **Phase 0 is the mitigation.** If smoke fails, plan changes before production code lands. |
 | A future meta-group exceeds 20 conditions without sub-pagination working correctly | Low | `test_split_meta_for_grid_subpaginates_at_page_size` covers the >20 case explicitly. |
-| Discord rate-limits rapid toggle clicks | Low | `unverified:` per § 2.6 — each click is a separate 3-second interaction with its own deadline; the platform absorbs rate. If smoke shows symptoms, add client-side debounce in Phase 5. |
+| Discord rate-limits rapid toggle clicks | Low | `unverified:` per § 2.6 — each click is a separate 3-second interaction with its own deadline; the platform absorbs rate. **Mitigation lives in Phase 5 Step 3a (conditional)**: if the 30-click stress surfaces 429s or visible lag, add asyncio.Lock or 250ms throttle in `_ToggleButton.callback`. If clean, Step 3a is a no-op. |
 | Button click delivery reordering under fast user input | Low | `unverified:` — discord.py dispatches sequentially per view (§ 2.6) but Discord-side ordering under network delay is not documented. Smoke includes a 30-click stress in step 2. |
 | Removing `build_summary_embed` would break the new view (verifying it stays) | N/A | Phase 4 explicitly keeps `build_summary_embed`; `__all__` retains the export. |
 | Merging without manual smoke (the recurring PR #139/#143/#144 failure) | Medium | Two checkboxes in PR body — Phase 0 smoke confirmation + dev-guild smoke. Reviewer bot blocks merge while either is unchecked. |
