@@ -51,8 +51,8 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 _LINK_YOUR_ACCOUNT_MSG = (
-    "Your Discord account isn't registered in siege-web. "
-    "Sign in once at https://rslsiege.com to link your account."
+    "Your Discord account isn't registered with siege-web yet. "
+    "Ask a clan admin to add you, then try this command again."
 )
 
 _OPS_ERROR_MSG = "An internal error occurred while contacting siege-web. " "Please try again later."

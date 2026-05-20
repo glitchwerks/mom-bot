@@ -238,8 +238,8 @@ async def test_get_command_empty_prefs_shows_none_set_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_command_404_shows_link_account_guidance() -> None:
-    """/post-conditions-get on 404 shows link-your-account guidance via followup."""
+async def test_get_command_404_shows_ask_admin_guidance() -> None:
+    """/post-conditions-get on 404 shows ask-admin guidance via followup."""
     interaction = _make_interaction()
     siege_client = _make_client()
     siege_client.get_my_preferences = AsyncMock(side_effect=SiegeWebNotFoundError())
@@ -248,7 +248,8 @@ async def test_get_command_404_shows_link_account_guidance() -> None:
 
     call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
-    assert "rslsiege.com" in content.lower()
+    assert "isn't registered with siege-web" in content
+    assert "rslsiege.com" not in content
     assert call_args[1].get("ephemeral") is True
     interaction.response.send_message.assert_not_awaited()
 
@@ -357,8 +358,8 @@ async def test_set_command_sends_ephemeral_reply() -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_command_404_shows_link_account_guidance() -> None:
-    """/post-conditions-set on 404 from GET shows link-your-account guidance via followup."""
+async def test_set_command_404_shows_ask_admin_guidance() -> None:
+    """/post-conditions-set on 404 from GET shows ask-admin guidance via followup."""
     interaction = _make_interaction()
     siege_client = _make_client()
     siege_client.get_my_preferences = AsyncMock(side_effect=SiegeWebNotFoundError())
@@ -367,7 +368,8 @@ async def test_set_command_404_shows_link_account_guidance() -> None:
 
     call_args = interaction.followup.send.call_args
     content: str = call_args[0][0] if call_args[0] else call_args[1].get("content", "")
-    assert "rslsiege.com" in content.lower()
+    assert "isn't registered with siege-web" in content
+    assert "rslsiege.com" not in content
     assert call_args[1].get("ephemeral") is True
     interaction.response.send_message.assert_not_awaited()
 
