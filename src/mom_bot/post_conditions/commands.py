@@ -29,7 +29,6 @@ the command tree::
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import discord
 import discord.app_commands
@@ -62,33 +61,6 @@ _OPS_ERROR_MSG = "An internal error occurred while contacting siege-web. " "Plea
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _format_catalog(
-    conditions: list[dict[str, Any]],
-) -> str:
-    """Format a list of conditions as a grouped, human-readable string.
-
-    Groups conditions by meta-category in :data:`META_GROUPS` order and
-    renders each group as a Markdown section with a bullet list.
-
-    Args:
-        conditions: PostConditionResponse dicts to format.
-
-    Returns:
-        A Markdown-formatted string suitable for an ephemeral Discord message.
-    """
-    groups = group_by_meta(conditions)
-    if not groups:
-        return "No post-conditions found."
-
-    lines: list[str] = []
-    for meta_label, conds in groups:
-        lines.append(f"**{meta_label}**")
-        for cond in conds:
-            lines.append(f"- {cond['description']}")
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 # ---------------------------------------------------------------------------
