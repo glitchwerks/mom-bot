@@ -502,9 +502,9 @@ async def test_catalog_command_embed_shows_all_conditions() -> None:
     embed: discord.Embed = interaction.followup.send.call_args[1]["embed"]
     desc = embed.description or ""
     for cond in _CATALOG:
-        assert cond["description"] in desc, (
-            f"catalog embed missing condition: {cond['description']!r}"
-        )
+        assert (
+            cond["description"] in desc
+        ), f"catalog embed missing condition: {cond['description']!r}"
 
 
 @pytest.mark.asyncio
@@ -519,13 +519,11 @@ async def test_catalog_command_empty_catalog_sends_text_message() -> None:
     call_kwargs = interaction.followup.send.call_args[1]
     has_embed = isinstance(call_kwargs.get("embed"), discord.Embed)
     content = call_kwargs.get("content", "") or (
-        interaction.followup.send.call_args[0][0]
-        if interaction.followup.send.call_args[0]
-        else ""
+        interaction.followup.send.call_args[0][0] if interaction.followup.send.call_args[0] else ""
     )
-    assert not has_embed or "no post-conditions" in (content or "").lower(), (
-        "empty catalog path must use a plain text message, not an embed"
-    )
+    assert (
+        not has_embed or "no post-conditions" in (content or "").lower()
+    ), "empty catalog path must use a plain text message, not an embed"
 
 
 # ---------------------------------------------------------------------------
@@ -564,9 +562,9 @@ async def test_get_command_embed_contains_only_user_prefs() -> None:
     pref_ids = {p["id"] for p in _PREFS}
     for cond in _CATALOG:
         if cond["id"] not in pref_ids:
-            assert cond["description"] not in desc, (
-                f"get embed must not show non-pref condition: {cond['description']!r}"
-            )
+            assert (
+                cond["description"] not in desc
+            ), f"get embed must not show non-pref condition: {cond['description']!r}"
 
 
 @pytest.mark.asyncio

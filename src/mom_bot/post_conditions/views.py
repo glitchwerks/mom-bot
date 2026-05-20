@@ -121,9 +121,7 @@ def build_grouped_embed(
     # compute how many *item* lines (non-bold) were dropped.
     kept: list[str] = []
     # Pre-count total item lines (non-heading, non-blank).
-    total_item_lines = sum(
-        1 for ln in lines if ln and not ln.startswith("**")
-    )
+    total_item_lines = sum(1 for ln in lines if ln and not ln.startswith("**"))
 
     for ln in lines:
         tentative = kept + [ln]
