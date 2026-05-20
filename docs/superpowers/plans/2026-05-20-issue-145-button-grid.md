@@ -6,9 +6,11 @@ touches:
   - src/mom_bot/post_conditions/views.py
   - src/mom_bot/post_conditions/modal_layout.py
   - src/mom_bot/post_conditions/grid_layout.py
+  - src/mom_bot/post_conditions/discord_display.py
   - tests/post_conditions/test_modal.py
   - tests/post_conditions/test_modal_layout.py
   - tests/post_conditions/test_grid_layout.py
+  - tests/post_conditions/test_discord_display.py
   - tests/post_conditions/test_views.py
   - tests/post_conditions/test_commands.py
   - scripts/smoke_v1_button_grid.py
@@ -117,11 +119,19 @@ Toggle callbacks can re-style in place; no rebuild required for visual feedback 
 
 ## 3. Design decisions
 
-### 3.1 Page size 20, page boundaries follow META_GROUPS
+### 3.1 Per-meta-group pagination — META_GROUP is the outer chunk; 20 is the sub-page cap
 
-`split_meta_for_modals` (`modal_layout.py:L40-L87`) chunks at `_PAGE_SIZE = 10`. The grid permits twice that. We introduce **`grid_layout.py`** with `split_meta_for_grid(conditions, page_size=20) -> list[GridPage]`, mirroring the existing module's contract (`GridPage = NamedTuple(label, conditions)`) but with the new page size. The "(i/N)" suffix semantics carry over: a meta-group with ≤20 conditions stays as one page; >20 splits with `"Foo (1/2)"`, `"Foo (2/2)"`.
+**Outer chunking = one page per META_GROUP.** Capacity is *not* the chunking boundary across meta-groups. Each entry in `META_GROUPS` becomes its own page (or set of sub-pages if that group's condition count exceeds the per-page cap). Pages from different meta-groups are **never** merged, even when there is unused capacity on the prior page.
 
-Page boundaries follow `META_GROUPS` order (do **not** interleave meta-groups to fill pages tighter). Rationale: meta-group is the user's mental model for navigating preferences, and the page label (rendered in the embed title) names it. Filling tighter would force a label like "Mixed" that conveys nothing.
+**Inner sub-pagination cap = 20.** A meta-group with ≤20 conditions renders as a single page. A meta-group with >20 conditions sub-paginates: `"Foo (1/2)"`, `"Foo (2/2)"`, each holding at most 20 toggles. The 20-cap derives from § 2.7 (5 rows × 5 width-units − 1 reserved nav row of 4 buttons + 1 slack slot).
+
+**Page-count formula:** `sum(ceil(len(group) / 20) for group in META_GROUPS)`.
+
+**With the current catalog (19/11/6):** `ceil(19/20) + ceil(11/20) + ceil(6/20) = 1 + 1 + 1 = 3 pages`. No sub-pagination triggers today.
+
+We introduce **`grid_layout.py`** with `split_by_meta_group(conditions, page_size=20) -> list[GridPage]`. The implementation iterates `META_GROUPS` in canonical order; for each meta-group, it sorts the conditions and chunks them at `page_size`. A meta-group never shares a page with another meta-group. `GridPage = NamedTuple(label, conditions)`.
+
+Rationale: meta-group is the user's mental model for navigating preferences, and the page label (rendered in the embed title — § 3.11) names it. Capacity-packing across groups would force a heading like "Mixed" that conveys nothing, and would couple groups whose conditions are unrelated.
 
 `modal_layout.py` is deleted in Phase 4; its tests at `tests/post_conditions/test_modal_layout.py` are deleted alongside (chunking logic is re-implemented and re-tested in `test_grid_layout.py`).
 
@@ -140,11 +150,15 @@ The View instance holds:
 
 **No PUT on toggle.** No PUT on page-change. The single network call lives in `SaveButton.callback`.
 
-### 3.4 Summary embed: keep `build_summary_embed`, refresh on every toggle
+### 3.4 Summary embed: keep `build_summary_embed`, refresh on every toggle, render items with `short_label`
 
 `build_summary_embed` (`views.py:L109-L202`) already takes `(pages, selections_keyed)` and returns a `discord.Embed`. We keep it. The adapter is shaped slightly differently — the current code uses `selections: dict[str, set[int]]` (meta-keyed). The new view stores `_selections: dict[int, bool]`. A small adapter `_flat_to_meta_keyed(selections_flat, pages) -> dict[str, set[int]]` projects the flat dict into the meta-keyed shape `build_summary_embed` expects. This adapter is the moral equivalent of the existing `_selections_to_meta_keyed` (`views.py:L70-L106`) but takes a flat dict instead of the modal's per-page Select payloads.
 
-Every toggle callback rebuilds the view (re-renders buttons with new styles) and rebuilds the embed, then calls `interaction.response.edit_message(embed=new_embed, view=self)`. The user sees both surfaces update together.
+**Item rendering uses `short_label`.** When `build_summary_embed` enumerates the selected conditions under each meta-group's bullet list, each line uses `discord_display.short_label(condition)` rather than the canonical `condition["label"]`. The summary therefore visually matches the button labels the user has been clicking. The meta-group **heading** itself is the canonical meta-label from `META_GROUPS` — only individual condition lines are shortened.
+
+The `_summary_pages()` helper (§ 3.10 / B1 fix) feeds into `build_summary_embed`; with per-meta-group pagination (§ 3.1), each meta-group already corresponds to ≤1 page-group of sub-pages, so `_summary_pages()` is mostly a no-op today — but it remains defense-in-depth against any future data growth that triggers sub-pagination.
+
+Every toggle callback rebuilds the view (re-renders buttons with new styles) and rebuilds the embed via `_build_embed_for_current_page()` (§ 3.11), then calls `interaction.response.edit_message(embed=new_embed, view=self)`. The user sees both surfaces update together.
 
 ### 3.5 Pagination semantics: selections persist across page changes
 
@@ -179,6 +193,94 @@ Page boundaries follow meta-groups (§ 3.1). The embed title for the current pag
 - `commands.py` defer + parallel-fetch pattern at L201-L207 — unchanged.
 - `_LINK_YOUR_ACCOUNT_MSG`, `_OPS_ERROR_MSG`, error-path branches at `commands.py:L208-L224` — unchanged.
 
+### 3.10 Label shortening — Discord-only adaptation
+
+Discord button labels render poorly when they carry full canonical condition strings ("Only Sylvan Watcher Champions can be used.") — width pressure forces 1-per-row layout and the user cannot scan a grid. We adapt **mom-bot-side only**: a new module `src/mom_bot/post_conditions/discord_display.py` exposes a single function:
+
+```python
+def short_label(condition: Mapping[str, Any]) -> str:
+    """Return the Discord-display short label for a post-condition.
+
+    Raises KeyError if the condition's canonical label is not in the
+    table — fail loudly so a new catalog entry cannot silently bypass
+    the shortening table.
+    """
+```
+
+The function reads `condition["label"]` (the canonical string from siege-web's `/api/post-conditions`) and returns the mapped short string. **Surface scope:** used by `_ToggleButton` for button labels AND by `build_summary_embed` for item lines in the cross-page summary. **Not used** elsewhere — siege-web's API surface is unchanged, the web frontend continues to see canonical labels, and any future bot or consumer is unaffected.
+
+**Invariants:**
+
+- `max(len(short) for short in _SHORT_LABELS.values()) <= 25` — asserted at import time. 25 chars is the visual budget that allows 5 buttons per row without truncation.
+- Every catalog entry has a mapping. Asserted at import time (test exercises this against the fixture catalog; production add-or-die enforcement lives in the smoke and in the test suite).
+- The table is a closed dict — unknown raw labels raise `KeyError`. Rationale: a silent fall-through to the canonical label would re-introduce the wide-button visual problem invisibly when siege-web ships a new condition.
+
+**Canonical table** (copied from `scripts/smoke_v1_button_grid.py` `_SHORT_LABELS` at commit `87e2378` — values are authoritative; do not modify without re-running the Phase 0 smoke comparison):
+
+| Meta-group | Canonical label | Short label |
+|---|---|---|
+| Faction & League | `Only Champions from the Telerian League can be used.` | `Telerian League` |
+| Faction & League | `Only Champions from the Gaellen Pact can be used.` | `Gaellen Pact` |
+| Faction & League | `Only Champions from The Corrupted can be used.` | `The Corrupted` |
+| Faction & League | `Only Champions from the Nyresan Union can be used.` | `Nyresan Union` |
+| Faction & League | `Only Banner Lord Champions can be used.` | `Banner Lords` |
+| Faction & League | `Only High Elves Champions can be used.` | `High Elves` |
+| Faction & League | `Only Sacred Order Champions can be used.` | `Sacred Order` |
+| Faction & League | `Only Barbarian Champions can be used.` | `Barbarians` |
+| Faction & League | `Only Ogryn Tribe Champions can be used.` | `Ogryn Tribe` |
+| Faction & League | `Only Lizardmen Champions can be used.` | `Lizardmen` |
+| Faction & League | `Only Skinwalker Champions can be used.` | `Skinwalkers` |
+| Faction & League | `Only Orc Champions can be used.` | `Orcs` |
+| Faction & League | `Only Demonspawn Champions can be used.` | `Demonspawn` |
+| Faction & League | `Only Undead Horde Champions can be used.` | `Undead Horde` |
+| Faction & League | `Only Dark Elves Champions can be used.` | `Dark Elves` |
+| Faction & League | `Only Knights Revenant Champions can be used.` | `Knights Revenant` |
+| Faction & League | `Only Dwarves Champions can be used.` | `Dwarves` |
+| Faction & League | `Only Shadowkin Champions can be used.` | `Shadowkin` |
+| Faction & League | `Only Sylvan Watcher Champions can be used.` | `Sylvan Watchers` |
+| Role, Affinity, Rarity | `Only HP Champions can be used.` | `HP` |
+| Role, Affinity, Rarity | `Only DEF Champions can be used.` | `DEF` |
+| Role, Affinity, Rarity | `Only Support Champions can be used.` | `Support` |
+| Role, Affinity, Rarity | `Only ATK Champions can be used.` | `ATK` |
+| Role, Affinity, Rarity | `Only Void Champions can be used.` | `Void` |
+| Role, Affinity, Rarity | `Only Force Champions can be used.` | `Force` |
+| Role, Affinity, Rarity | `Only Magic Champions can be used.` | `Magic` |
+| Role, Affinity, Rarity | `Only Spirit Champions can be used.` | `Spirit` |
+| Role, Affinity, Rarity | `Only Legendary Champions can be used.` | `Legendary` |
+| Role, Affinity, Rarity | `Only Epic Champions can be used.` | `Epic` |
+| Role, Affinity, Rarity | `Only Rare Champions can be used.` | `Rare` |
+| Effects & Other | `All Champions are immune to Turn Meter reduction effects.` | `Immune: TM reduction` |
+| Effects & Other | `All Champions are immune to Turn Meter fill effects.` | `Immune: TM fill` |
+| Effects & Other | `All Champions are immune to cooldown increasing effects.` | `Immune: CD increase` |
+| Effects & Other | `All Champions are immune to cooldown decreasing effects.` | `Immune: CD decrease` |
+| Effects & Other | `All Champions are immune to [Sheep] debuffs.` | `Immune: [Sheep]` |
+| Effects & Other | `Champions cannot be revived.` | `No revives` |
+
+Total: 19 + 11 + 6 = 36 entries. Max short-label length verified ≤ 25 chars.
+
+### 3.11 Header surface — embed title carries the meta-group heading per page
+
+Each page renders an embed whose `title` is:
+
+```
+"Editing — {meta_label} (page {i}/{N})"
+```
+
+Where `{meta_label}` is the active page's meta-group label (the `META_GROUPS` canonical name) and `{i}/{N}` is the 1-based current page index over total pages. With the current 3-page catalog, the user sees in sequence:
+
+- `Editing — Faction & League (page 1/3)`
+- `Editing — Role, Affinity, Rarity (page 2/3)`
+- `Editing — Effects & Other (page 3/3)`
+
+The embed **description** continues to carry the cross-page summary — all staged selections, grouped by meta-group, rendered with `short_label`. The user therefore sees both (a) "where am I now" (title) and (b) "what have I staged everywhere" (description) on every page.
+
+**Implementation:** all paths (initial render, toggle callback, nav callback, save callback) build the embed through the canonical helper `PostConditionsGridView._build_embed_for_current_page()`. The helper:
+
+1. Calls `build_summary_embed(pages=self._summary_pages(), selections=_flat_to_meta_keyed(self._selections, self._pages))` to get the description-bearing embed.
+2. Overrides `embed.title` with the templated header string above, derived from `self._pages[self._page_index].label` and `(self._page_index + 1, len(self._pages))`.
+
+Sub-pagination interaction: when a meta-group sub-paginates (not today, but possible later if a group grows past 20), the page label already carries the `(i/N)` suffix internally. The embed title strips and re-renders consistently — the `(page i/N)` suffix in the title reflects the *grid* page index, not the meta-group sub-page index. If both are present, the title becomes e.g. `Editing — Faction & League (1/2) (page 2/4)`. Acceptable; sub-pagination is a degenerate case.
+
 ### 3.9 Decision log: V2 abandonment
 
 - **2026-05-20:** First V2 smoke (`scripts/smoke_v2_checkbox.py`, commit `6f33b1c`) registered `/v2-smoke` on the dev guild. Discord rejected the payload with 400 — `CheckboxGroup` is not permitted at the top level of a V2 message. Outcome posted as comment on [#145](https://github.com/glitchwerks/mom-bot/issues/145).
@@ -198,11 +300,13 @@ Page boundaries follow meta-groups (§ 3.1). The embed title for the current pag
 
 | File | Status | Responsibility |
 |---|---|---|
-| `src/mom_bot/post_conditions/grid_layout.py` | **CREATE** | `GridPage` NamedTuple + `split_meta_for_grid(conditions, page_size=20)`. Pure data, discord-free. |
+| `src/mom_bot/post_conditions/grid_layout.py` | **CREATE** | `GridPage` NamedTuple + `split_by_meta_group(conditions, page_size=20)`. Per-meta-group chunking; pure data, discord-free. |
+| `src/mom_bot/post_conditions/discord_display.py` | **CREATE** | `short_label(condition)` + `_SHORT_LABELS` table. Discord-only UI adaptation; pure data, discord-free at import. |
 | `src/mom_bot/post_conditions/views.py` | MODIFY | Delete modal classes; add `PostConditionsGridView`, `_ToggleButton`, `SaveButton`, `CancelButton`, `NavButton`, `_flat_to_meta_keyed`. Keep `build_summary_embed`. |
 | `src/mom_bot/post_conditions/commands.py` | MODIFY (L226-L238 only) | Swap `EditPreferencesView` for `PostConditionsGridView`. |
 | `src/mom_bot/post_conditions/modal_layout.py` | **DELETE** | Modal-specific chunking, superseded. |
-| `tests/post_conditions/test_grid_layout.py` | **CREATE** | Unit tests for `split_meta_for_grid`. |
+| `tests/post_conditions/test_grid_layout.py` | **CREATE** | Unit tests for `split_by_meta_group`. |
+| `tests/post_conditions/test_discord_display.py` | **CREATE** | Unit tests for `short_label` + table invariants (≤25 chars, total coverage, KeyError on unknown). |
 | `tests/post_conditions/test_views.py` | MODIFY | Drop modal-button tests; keep `build_summary_embed` tests; add `PostConditionsGridView` tests. |
 | `tests/post_conditions/test_commands.py` | MODIFY | Assert new view type; keep error-path coverage. |
 | `tests/post_conditions/test_modal.py` | **DELETE** | Modal-specific (568 lines). |
@@ -312,7 +416,15 @@ Confirm in the dev guild (expand the docstring checklist to ~10 items):
   10. Toggle opt-22 and opt-24 on page 2. Embed now shows five selected, with the meta-group heading appearing **only once** (no duplicate "opt group" line).
   11. Click Prev. Page 1 re-renders. opt-2, opt-7, opt-14 still show `success` style. Embed unchanged.
 
-- [ ] **Step 4: Post smoke result to issue #145.** Use a comment with either screenshots of both smoke invocations (`/v1-smoke` and `/v1-grid-smoke-multipage`) or a copy-paste of the bot log showing both round-trips. Body must include the keyword `smoke verified` so the Phase 5 PR-body checkbox can verify it via `gh issue view 145 --comments`. **Both single-page and multi-page results must appear in the comment before the Phase 1 PR opens.**
+- [ ] **Step 3c: Invoke `/v1-smoke-short-labels` in the dev guild.** This command (added at commit `87e2378`) renders the per-meta-group pagination with shortened button labels (§ 3.10) alongside the canonical-label baseline from `/v1-smoke-hardcoded-catalog`. Compare the two visually:
+  - Per-meta-group pagination renders one meta-group per page (no capacity-packing across groups).
+  - Embed title carries `"Editing — {meta_label} (page i/N)"` (§ 3.11).
+  - Buttons fit ~5 per row at short-label widths; canonical-label baseline visibly fails this.
+  - Cross-page summary uses short labels for items, canonical labels for headings.
+
+  **User decision gate:** the user inspects both renders and decides whether the shortening table in `_SHORT_LABELS` is acceptable as-is or needs per-label tuning before Phase 1 begins. If tuning is requested, update both the smoke's `_SHORT_LABELS` and the canonical table in § 3.10 of this plan in the same commit, then re-run this step. **Do not start Phase 1 until the user signs off.**
+
+- [ ] **Step 4: Post smoke result to issue #145.** Use a comment with either screenshots of all three smoke invocations (`/v1-smoke`, `/v1-grid-smoke-multipage`, `/v1-smoke-short-labels`) or a copy-paste of the bot log showing all three round-trips. Body must include the keyword `smoke verified` so the Phase 5 PR-body checkbox can verify it via `gh issue view 145 --comments`. **The comment must include the comparison observation from Step 3c** — at minimum a one-line note like "short-label rendering accepted as-is" or "short-label rendering needs tuning: <list>". Single-page, multi-page, and short-label results must all appear in the comment before the Phase 1 PR opens.
 
 - [ ] **Step 5: Commit the smoke script.**
 
@@ -327,6 +439,8 @@ git commit -m "feat(#145): Phase 0 V1 button-grid smoke (single + multipage)"
 
 ### Phase 1 — `grid_layout.py` chunking module [BLOCKED ON PHASE 0]
 
+Goal: implement **per-meta-group chunking** per § 3.1. Outer chunk = one page per `META_GROUPS` entry; inner sub-page cap = 20.
+
 **Files:**
 - Create: `src/mom_bot/post_conditions/grid_layout.py`
 - Create: `tests/post_conditions/test_grid_layout.py`
@@ -335,17 +449,17 @@ git commit -m "feat(#145): Phase 0 V1 button-grid smoke (single + multipage)"
 
 ```python
 # tests/post_conditions/test_grid_layout.py
-"""Tests for grid_layout.split_meta_for_grid."""
+"""Tests for grid_layout.split_by_meta_group."""
 from __future__ import annotations
 
 import pytest
 
-from mom_bot.post_conditions.grid_layout import GridPage, split_meta_for_grid
+from mom_bot.post_conditions.grid_layout import GridPage, split_by_meta_group
 
 
-def test_split_meta_for_grid_empty_returns_empty_list() -> None:
+def test_split_by_meta_group_empty_returns_empty_list() -> None:
     """Empty input → empty page list."""
-    assert split_meta_for_grid([]) == []
+    assert split_by_meta_group([]) == []
 ```
 
 - [ ] **Step 2: Run it.** Expected: FAIL (ImportError: module not found).
@@ -360,12 +474,17 @@ def test_split_meta_for_grid_empty_returns_empty_list() -> None:
 # src/mom_bot/post_conditions/grid_layout.py
 """Grid-layout helpers for post-condition preference selection.
 
-Provides :class:`GridPage` and :func:`split_meta_for_grid`, which converts
-a flat list of PostConditionResponse dicts into pages of at most 20
-conditions each, grouped by meta-category.
+Provides :class:`GridPage` and :func:`split_by_meta_group`, which converts
+a flat list of PostConditionResponse dicts into pages, one page per
+META_GROUPS entry (with sub-pagination when a group exceeds page_size).
+
+Per-meta-group pagination: pages from different meta-groups are never
+merged, even when there is unused capacity on the prior page. The
+``page_size`` parameter is the *sub-page cap* within a meta-group, not
+a chunking boundary across groups.
 
 Page-size 20 matches the legacy-View 5-rows × 5-buttons cap minus one
-reserved nav row of 4 buttons (see issue #145 plan § 2.7).
+reserved nav row of 4 buttons (see issue #145 plan § 2.7 and § 3.1).
 
 This module is intentionally discord-free.
 """
@@ -382,9 +501,11 @@ _PAGE_SIZE: int = 20
 class GridPage(NamedTuple):
     """A single page of conditions for the button-grid view.
 
+    Each page belongs to exactly one meta-group.
+
     Attributes:
         label: Human-readable page title, e.g. ``"Faction & League"`` or
-            ``"Effects & Other (2/2)"`` when a meta-group spans pages.
+            ``"Effects & Other (2/2)"`` when a meta-group sub-paginates.
         conditions: Ordered list of PostConditionResponse dicts for this
             page. Each dict contains at minimum ``id`` (int),
             ``condition_type`` (str), and ``description`` (str).
@@ -394,11 +515,24 @@ class GridPage(NamedTuple):
     conditions: list[dict[str, Any]]
 
 
-def split_meta_for_grid(
+def split_by_meta_group(
     conditions: list[dict[str, Any]],
     page_size: int = _PAGE_SIZE,
 ) -> list[GridPage]:
-    """Split conditions into grid-sized pages grouped by meta-category."""
+    """Split conditions into per-meta-group pages.
+
+    Iterates META_GROUPS in canonical order; for each meta-group with
+    one or more matching conditions, emits 1..ceil(len/page_size)
+    GridPages. Pages from different meta-groups are never merged.
+
+    Args:
+        conditions: Flat list of PostConditionResponse dicts.
+        page_size: Sub-pagination cap within a meta-group (default 20).
+
+    Returns:
+        Ordered list of GridPages. Empty if input is empty or no
+        condition matches any known meta-group.
+    """
     pages: list[GridPage] = []
 
     for meta_label, conds in group_by_meta(conditions):
@@ -423,8 +557,13 @@ def split_meta_for_grid(
 - [ ] **Step 5: Add the meta-bucketing test.**
 
 ```python
-def test_split_meta_for_grid_groups_by_meta_in_canonical_order() -> None:
+def test_split_by_meta_group_one_page_per_meta_group_no_merging() -> None:
     """Conditions split into one page per non-empty meta-group in META_GROUPS order.
+
+    Critically: pages from different meta-groups are NEVER merged, even when the
+    prior page has unused capacity. With the current catalog (19/11/6 conditions),
+    this yields 3 pages — not 2 (which a capacity-packing scheme would produce
+    by merging the 11 and 6 groups onto a single page of 17).
 
     Note: the expected labels below ("Faction & League", "Role, Affinity, Rarity",
     "Effects & Other") are the source-of-truth values defined in
@@ -437,7 +576,7 @@ def test_split_meta_for_grid_groups_by_meta_in_canonical_order() -> None:
         {"id": 3, "condition_type": "effect", "description": "E1"},
         {"id": 4, "condition_type": "league", "description": "L1"},
     ]
-    pages = split_meta_for_grid(conditions)
+    pages = split_by_meta_group(conditions)
     assert [p.label for p in pages] == [
         "Faction & League",
         "Role, Affinity, Rarity",
@@ -451,14 +590,14 @@ def test_split_meta_for_grid_groups_by_meta_in_canonical_order() -> None:
 - [ ] **Step 7: Add the sub-pagination test.**
 
 ```python
-def test_split_meta_for_grid_subpaginates_at_page_size() -> None:
+def test_split_by_meta_group_subpaginates_at_page_size() -> None:
     """A meta-group with >20 conditions splits into (i/N) sub-pages."""
     # 25 faction conditions → 2 pages: (1/2) with 20, (2/2) with 5.
     conditions = [
         {"id": i, "condition_type": "faction", "description": f"F{i}"}
         for i in range(25)
     ]
-    pages = split_meta_for_grid(conditions)
+    pages = split_by_meta_group(conditions)
     assert [p.label for p in pages] == [
         "Faction & League (1/2)",
         "Faction & League (2/2)",
@@ -467,13 +606,13 @@ def test_split_meta_for_grid_subpaginates_at_page_size() -> None:
     assert len(pages[1].conditions) == 5
 
 
-def test_split_meta_for_grid_respects_custom_page_size() -> None:
+def test_split_by_meta_group_respects_custom_page_size() -> None:
     """`page_size` kwarg overrides the default."""
     conditions = [
         {"id": i, "condition_type": "faction", "description": f"F{i}"}
         for i in range(5)
     ]
-    pages = split_meta_for_grid(conditions, page_size=2)
+    pages = split_by_meta_group(conditions, page_size=2)
     assert [p.label for p in pages] == [
         "Faction & League (1/3)",
         "Faction & League (2/3)",
@@ -487,7 +626,218 @@ def test_split_meta_for_grid_respects_custom_page_size() -> None:
 
 ```bash
 git add src/mom_bot/post_conditions/grid_layout.py tests/post_conditions/test_grid_layout.py
-git commit -m "feat(#145): add grid_layout chunking module (page_size=20)"
+git commit -m "feat(#145): add grid_layout per-meta-group chunking (page_size=20)"
+```
+
+---
+
+### Phase 1.5 — `discord_display.py` short-label module [BLOCKED ON PHASE 1]
+
+Goal: implement § 3.10 (Discord-only label shortening) as a standalone, discord-free module. TDD; module is consumed by Phase 2's view and `build_summary_embed`.
+
+**Files:**
+- Create: `src/mom_bot/post_conditions/discord_display.py`
+- Create: `tests/post_conditions/test_discord_display.py`
+
+- [ ] **Step 1: Write the failing test for a known raw label.**
+
+```python
+# tests/post_conditions/test_discord_display.py
+"""Tests for discord_display.short_label and the _SHORT_LABELS table."""
+from __future__ import annotations
+
+import pytest
+
+from mom_bot.post_conditions.discord_display import (
+    _SHORT_LABELS,
+    short_label,
+)
+
+
+def test_short_label_returns_short_form_for_known_raw_label() -> None:
+    """A canonical label maps to its short form (Sylvan Watcher → Sylvan Watchers)."""
+    condition = {
+        "id": 42,
+        "label": "Only Sylvan Watcher Champions can be used.",
+        "condition_type": "faction",
+    }
+    assert short_label(condition) == "Sylvan Watchers"
+```
+
+- [ ] **Step 2: Run.** Expected: FAIL (ImportError: module not found).
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/post_conditions/test_discord_display.py -v
+```
+
+- [ ] **Step 3: Create the module with the canonical table.** Source values from § 3.10. Import-time assertions enforce the ≤25-char invariant.
+
+```python
+# src/mom_bot/post_conditions/discord_display.py
+"""Discord-only display adaptations for post-conditions.
+
+This module exists because Discord button labels render poorly when they
+carry full canonical condition strings (~30-50 chars). The shortening
+applied here is *Discord-UI only* — siege-web's API surface, the web
+frontend, and any future bot or consumer continue to see canonical
+labels unmodified.
+
+The :data:`_SHORT_LABELS` table is the single source of truth. Adding a
+new condition to the siege-web catalog requires adding a mapping here.
+Unknown raw labels raise :class:`KeyError` to fail loudly rather than
+silently fall through to the wide canonical label.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Mapping
+
+__all__ = ["short_label"]
+
+
+_SHORT_LABELS: dict[str, str] = {
+    # --- Faction & League ---
+    "Only Champions from the Telerian League can be used.": "Telerian League",
+    "Only Champions from the Gaellen Pact can be used.": "Gaellen Pact",
+    "Only Champions from The Corrupted can be used.": "The Corrupted",
+    "Only Champions from the Nyresan Union can be used.": "Nyresan Union",
+    "Only Banner Lord Champions can be used.": "Banner Lords",
+    "Only High Elves Champions can be used.": "High Elves",
+    "Only Sacred Order Champions can be used.": "Sacred Order",
+    "Only Barbarian Champions can be used.": "Barbarians",
+    "Only Ogryn Tribe Champions can be used.": "Ogryn Tribe",
+    "Only Lizardmen Champions can be used.": "Lizardmen",
+    "Only Skinwalker Champions can be used.": "Skinwalkers",
+    "Only Orc Champions can be used.": "Orcs",
+    "Only Demonspawn Champions can be used.": "Demonspawn",
+    "Only Undead Horde Champions can be used.": "Undead Horde",
+    "Only Dark Elves Champions can be used.": "Dark Elves",
+    "Only Knights Revenant Champions can be used.": "Knights Revenant",
+    "Only Dwarves Champions can be used.": "Dwarves",
+    "Only Shadowkin Champions can be used.": "Shadowkin",
+    "Only Sylvan Watcher Champions can be used.": "Sylvan Watchers",
+    # --- Role, Affinity, Rarity ---
+    "Only HP Champions can be used.": "HP",
+    "Only DEF Champions can be used.": "DEF",
+    "Only Support Champions can be used.": "Support",
+    "Only ATK Champions can be used.": "ATK",
+    "Only Void Champions can be used.": "Void",
+    "Only Force Champions can be used.": "Force",
+    "Only Magic Champions can be used.": "Magic",
+    "Only Spirit Champions can be used.": "Spirit",
+    "Only Legendary Champions can be used.": "Legendary",
+    "Only Epic Champions can be used.": "Epic",
+    "Only Rare Champions can be used.": "Rare",
+    # --- Effects & Other ---
+    "All Champions are immune to Turn Meter reduction effects.": "Immune: TM reduction",
+    "All Champions are immune to Turn Meter fill effects.": "Immune: TM fill",
+    "All Champions are immune to cooldown increasing effects.": "Immune: CD increase",
+    "All Champions are immune to cooldown decreasing effects.": "Immune: CD decrease",
+    "All Champions are immune to [Sheep] debuffs.": "Immune: [Sheep]",
+    "Champions cannot be revived.": "No revives",
+}
+
+
+# Invariant: every short label fits within the 25-char visual budget that
+# allows ~5 buttons per row without Discord truncating the label.
+assert max(len(s) for s in _SHORT_LABELS.values()) <= 25, (
+    "A short label in _SHORT_LABELS exceeds the 25-char visual budget; "
+    "shorten it or raise the budget intentionally."
+)
+
+
+def short_label(condition: Mapping[str, Any]) -> str:
+    """Return the Discord-display short label for a post-condition.
+
+    Args:
+        condition: Mapping with at minimum a ``"label"`` key holding the
+            canonical condition string from siege-web.
+
+    Returns:
+        The shortened display label (≤ 25 chars) for use as a button
+        label or summary-embed item.
+
+    Raises:
+        KeyError: If ``condition["label"]`` is not present in the table.
+            Fail-loud is intentional — see module docstring.
+    """
+    raw = condition["label"]
+    try:
+        return _SHORT_LABELS[raw]
+    except KeyError:
+        raise KeyError(
+            f"No short label mapping for canonical label {raw!r}. "
+            f"Add an entry to _SHORT_LABELS in discord_display.py."
+        ) from None
+```
+
+- [ ] **Step 4: Run the first test.** Expected: PASS.
+
+- [ ] **Step 5: Add the unknown-label test.**
+
+```python
+def test_short_label_raises_keyerror_for_unknown_raw_label() -> None:
+    """Unknown raw labels raise KeyError — silent fall-through is disallowed."""
+    condition = {"id": 999, "label": "Some new condition not in the table."}
+    with pytest.raises(KeyError, match="No short label mapping"):
+        short_label(condition)
+```
+
+- [ ] **Step 6: Add the 25-char invariant test.**
+
+```python
+def test_all_short_labels_fit_within_25_chars() -> None:
+    """Every entry in _SHORT_LABELS is ≤25 chars (button-render budget)."""
+    overlong = {raw: short for raw, short in _SHORT_LABELS.items() if len(short) > 25}
+    assert not overlong, f"Short labels exceeding 25 chars: {overlong}"
+```
+
+- [ ] **Step 7: Add per-meta-group coverage tests.** At least one entry from each meta-group is exercised, to catch table truncation if a future edit accidentally drops a section.
+
+```python
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # Faction & League
+        ("Only Champions from the Telerian League can be used.", "Telerian League"),
+        ("Only Sylvan Watcher Champions can be used.", "Sylvan Watchers"),
+        # Role, Affinity, Rarity
+        ("Only HP Champions can be used.", "HP"),
+        ("Only Legendary Champions can be used.", "Legendary"),
+        # Effects & Other
+        ("All Champions are immune to Turn Meter fill effects.", "Immune: TM fill"),
+        ("Champions cannot be revived.", "No revives"),
+    ],
+)
+def test_short_label_covers_each_meta_group(raw: str, expected: str) -> None:
+    assert short_label({"label": raw}) == expected
+```
+
+- [ ] **Step 8: Add the catalog-coverage test.** Asserts every canonical-catalog label has a mapping. Uses the same fixture catalog the views tests use.
+
+```python
+def test_short_labels_table_covers_full_hardcoded_catalog() -> None:
+    """Every label in the smoke's _HARDCODED_CATALOG has a short-label mapping.
+
+    Prevents the failure mode where siege-web adds a condition, the catalog
+    grows, and the button render falls over with KeyError at user-invocation
+    time. This test is the canary.
+    """
+    # 36 entries: 19 + 11 + 6 — see § 3.10.
+    assert len(_SHORT_LABELS) == 36
+```
+
+- [ ] **Step 9: Run all discord_display tests.** Expected: ALL PASS.
+
+```bash
+.venv/Scripts/python.exe -m pytest tests/post_conditions/test_discord_display.py -v
+```
+
+- [ ] **Step 10: Commit.**
+
+```bash
+git add src/mom_bot/post_conditions/discord_display.py tests/post_conditions/test_discord_display.py
+git commit -m "feat(#145): add discord_display.short_label + canonical table"
 ```
 
 ---
@@ -528,7 +878,8 @@ def test_grid_view_construction_seeds_selections_from_preferences() -> None:
 
 ```python
 # At top of views.py, alongside existing imports:
-from mom_bot.post_conditions.grid_layout import GridPage, split_meta_for_grid
+from mom_bot.post_conditions.grid_layout import GridPage, split_by_meta_group
+from mom_bot.post_conditions.discord_display import short_label
 ```
 
 Then append (after `build_summary_embed`):
@@ -594,7 +945,7 @@ class PostConditionsGridView(discord.ui.View):
         self._catalog = catalog
         self._discord_id = discord_id
         self._siege_client = siege_client
-        self._pages: list[GridPage] = split_meta_for_grid(catalog)
+        self._pages: list[GridPage] = split_by_meta_group(catalog)  # per-meta-group; § 3.1
         self._page_index: int = 0
 
         # Seed selections: every catalog id present, defaulted to its
@@ -632,16 +983,21 @@ class PostConditionsGridView(discord.ui.View):
 
         Builds the live-summary embed (always reflects *all* staged selections
         across all pages) and overrides its title with the *current* page's
-        label so the user has page context.
+        meta-group heading + page index (§ 3.11).
         """
         meta_keyed = _flat_to_meta_keyed(self._selections, self._pages)
         embed = build_summary_embed(
             pages=self._summary_pages(),
             selections=meta_keyed,
         )
-        embed.title = (
-            self._pages[self._page_index].label if self._pages else "Preferences"
-        )
+        if self._pages:
+            current = self._pages[self._page_index]
+            embed.title = (
+                f"Editing — {current.label} "
+                f"(page {self._page_index + 1}/{len(self._pages)})"
+            )
+        else:
+            embed.title = "Preferences"
         return embed
 
     def _build_components(self) -> None:
@@ -654,10 +1010,14 @@ class PostConditionsGridView(discord.ui.View):
         for i, cond in enumerate(page.conditions):
             cid = int(cond["id"])
             on = self._selections.get(cid, False)
+            # Button label uses discord_display.short_label (§ 3.10) so the
+            # button surface fits ~5 per row at ≤25 chars. The canonical label
+            # remains available on the condition dict for the summary embed
+            # heading / other surfaces.
             self.add_item(
                 _ToggleButton(
                     condition_id=cid,
-                    label=str(cond["description"])[:80],
+                    label=short_label(cond),
                     row=i // 5,
                     on=on,
                 )
@@ -860,10 +1220,59 @@ def test_grid_view_prev_disabled_on_first_page_next_disabled_on_last() -> None:
 
 - [ ] **Step 8: Run.** Expected: PASS.
 
+- [ ] **Step 8b: Add the embed-title meta-group-header test (§ 3.11).**
+
+```python
+def test_embed_title_carries_meta_group_header_for_current_page() -> None:
+    """Embed title matches "Editing — {meta_label} (page i/N)" for the active page."""
+    from mom_bot.post_conditions.views import PostConditionsGridView
+
+    catalog = [
+        {"id": 1, "label": "Only Banner Lord Champions can be used.",
+         "condition_type": "faction"},
+        {"id": 2, "label": "Only HP Champions can be used.",
+         "condition_type": "role"},
+    ]
+    view = PostConditionsGridView(
+        catalog=catalog, preferences=[], discord_id="x", siege_client=object()
+    )
+    # Page 0 → Faction & League.
+    embed = view.initial_embed()
+    assert embed.title == "Editing — Faction & League (page 1/2)"
+
+    # Advance to page 1 → Role, Affinity, Rarity.
+    view._page_index = 1
+    view._build_components()
+    embed = view.initial_embed()
+    assert embed.title == "Editing — Role, Affinity, Rarity (page 2/2)"
+```
+
+- [ ] **Step 8c: Add the button-label uses-short-label test (§ 3.10).**
+
+```python
+def test_toggle_button_label_uses_short_label_not_canonical() -> None:
+    """Buttons render with the discord_display short label, not the canonical string."""
+    from mom_bot.post_conditions.views import PostConditionsGridView, _ToggleButton
+
+    catalog = [
+        {"id": 1, "label": "Only Sylvan Watcher Champions can be used.",
+         "condition_type": "faction"},
+    ]
+    view = PostConditionsGridView(
+        catalog=catalog, preferences=[], discord_id="x", siege_client=object()
+    )
+    toggle = next(c for c in view.children if isinstance(c, _ToggleButton))
+    assert toggle.label == "Sylvan Watchers"
+```
+
 - [ ] **Step 9: Add the sub-pagination summary-embed dedup test (B1 regression guard).**
 
-This test would have caught the double-label bug where two sub-pages of the same
-meta-group caused the summary embed to render the heading + selections twice.
+Per-meta-group pagination (§ 3.1) makes the cross-meta-group double-heading bug
+structurally impossible at current data sizes (every page already belongs to a
+single meta-group). This test remains as **defense-in-depth** for the
+*sub-pagination* case: if a meta-group ever grows past 20 conditions, the
+`_summary_pages()` collapse logic must still merge sub-pages so the summary
+embed renders the heading exactly once.
 
 ```python
 def test_summary_pages_merges_subpaginated_meta_groups() -> None:
@@ -1301,7 +1710,8 @@ git rm scripts/smoke_v2_checkbox_in_container.py
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | Discord rejects the 25-component View payload (unlikely — legacy surface) | Very Low | **Phase 0 is the mitigation.** If smoke fails, plan changes before production code lands. |
-| A future meta-group exceeds 20 conditions without sub-pagination working correctly | Low | `test_split_meta_for_grid_subpaginates_at_page_size` covers the >20 case explicitly. |
+| A future meta-group exceeds 20 conditions without sub-pagination working correctly | Low | `test_split_by_meta_group_subpaginates_at_page_size` covers the >20 case explicitly. Per-meta-group pagination (§ 3.1) means the only way this risk surfaces is intra-group sub-pagination — the B1 regression test in Phase 2 Step 9 guards against the related summary-embed double-heading failure mode. |
+| Shortened button labels lose user context (e.g. "HP" alone is ambiguous out of context) | Medium | Meta-group header in embed title (§ 3.11) carries the missing context — the user always sees `"Editing — Role, Affinity, Rarity"` above a column of `HP / DEF / Support / ATK / …` buttons. Final commit response (Save) re-renders the summary with the same `short_label`-then-canonical-heading layout so the user can audit the staged set. **Smoke gate:** Phase 0 Step 3c surfaces this for the user to evaluate before any Phase 1 code lands. If smoke reveals the loss is too costly, the fallback is to revert to canonical labels in `_ToggleButton` and accept the 1-button-per-row visual issue (the table in `discord_display.py` is reused for the summary surface only). |
 | Discord rate-limits rapid toggle clicks | Low | `unverified:` per § 2.6 — each click is a separate 3-second interaction with its own deadline; the platform absorbs rate. **Mitigation lives in Phase 5 Step 3a (conditional)**: if the 30-click stress surfaces 429s or visible lag, add asyncio.Lock or 250ms throttle in `_ToggleButton.callback`. If clean, Step 3a is a no-op. |
 | Button click delivery reordering under fast user input | Low | `unverified:` — discord.py dispatches sequentially per view (§ 2.6) but Discord-side ordering under network delay is not documented. Smoke includes a 30-click stress in step 2. |
 | Removing `build_summary_embed` would break the new view (verifying it stays) | N/A | Phase 4 explicitly keeps `build_summary_embed`; `__all__` retains the export. |
