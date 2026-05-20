@@ -639,7 +639,7 @@ Goal: implement § 3.10 (Discord-only label shortening) as a standalone, discord
 - Create: `src/mom_bot/post_conditions/discord_display.py`
 - Create: `tests/post_conditions/test_discord_display.py`
 
-- [ ] **Step 1: Write the failing test for a known raw label.**
+- [x] **Step 1: Write the failing test for a known raw label.**
 
 ```python
 # tests/post_conditions/test_discord_display.py
@@ -664,13 +664,13 @@ def test_short_label_returns_short_form_for_known_raw_label() -> None:
     assert short_label(condition) == "Sylvan Watchers"
 ```
 
-- [ ] **Step 2: Run.** Expected: FAIL (ImportError: module not found).
+- [x] **Step 2: Run.** Expected: FAIL (ImportError: module not found).
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/post_conditions/test_discord_display.py -v
 ```
 
-- [ ] **Step 3: Create the module with the canonical table.** Source values from § 3.10. Import-time assertions enforce the ≤25-char invariant.
+- [x] **Step 3: Create the module with the canonical table.** Source values from § 3.10. Import-time assertions enforce the ≤25-char invariant.
 
 ```python
 # src/mom_bot/post_conditions/discord_display.py
@@ -771,9 +771,9 @@ def short_label(condition: Mapping[str, Any]) -> str:
         ) from None
 ```
 
-- [ ] **Step 4: Run the first test.** Expected: PASS.
+- [x] **Step 4: Run the first test.** Expected: PASS.
 
-- [ ] **Step 5: Add the unknown-label test.**
+- [x] **Step 5: Add the unknown-label test.**
 
 ```python
 def test_short_label_raises_keyerror_for_unknown_raw_label() -> None:
@@ -783,7 +783,7 @@ def test_short_label_raises_keyerror_for_unknown_raw_label() -> None:
         short_label(condition)
 ```
 
-- [ ] **Step 6: Add the 25-char invariant test.**
+- [x] **Step 6: Add the 25-char invariant test.**
 
 ```python
 def test_all_short_labels_fit_within_25_chars() -> None:
@@ -792,7 +792,7 @@ def test_all_short_labels_fit_within_25_chars() -> None:
     assert not overlong, f"Short labels exceeding 25 chars: {overlong}"
 ```
 
-- [ ] **Step 7: Add per-meta-group coverage tests.** At least one entry from each meta-group is exercised, to catch table truncation if a future edit accidentally drops a section.
+- [x] **Step 7: Add per-meta-group coverage tests.** At least one entry from each meta-group is exercised, to catch table truncation if a future edit accidentally drops a section.
 
 ```python
 @pytest.mark.parametrize(
@@ -813,7 +813,7 @@ def test_short_label_covers_each_meta_group(raw: str, expected: str) -> None:
     assert short_label({"label": raw}) == expected
 ```
 
-- [ ] **Step 8: Add the catalog-coverage test.** Asserts every canonical-catalog label has a mapping. Uses the same fixture catalog the views tests use.
+- [x] **Step 8: Add the catalog-coverage test.** Asserts every canonical-catalog label has a mapping. Uses the same fixture catalog the views tests use.
 
 ```python
 def test_short_labels_table_covers_full_hardcoded_catalog() -> None:
@@ -827,13 +827,13 @@ def test_short_labels_table_covers_full_hardcoded_catalog() -> None:
     assert len(_SHORT_LABELS) == 36
 ```
 
-- [ ] **Step 9: Run all discord_display tests.** Expected: ALL PASS.
+- [x] **Step 9: Run all discord_display tests.** Expected: ALL PASS.
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/post_conditions/test_discord_display.py -v
 ```
 
-- [ ] **Step 10: Commit.**
+- [x] **Step 10: Commit.**
 
 ```bash
 git add src/mom_bot/post_conditions/discord_display.py tests/post_conditions/test_discord_display.py
