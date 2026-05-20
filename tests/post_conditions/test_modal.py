@@ -1,14 +1,15 @@
 """Tests for EditPreferencesModal in mom_bot.post_conditions.views.
 
-Covers: CheckboxGroup wiring, title truncation, on_submit success path,
-on_submit failure/rollback path, embed re-render on submit, and
+Covers: StringSelect + Label wiring, title truncation, on_submit success
+path, on_submit failure/rollback path, embed re-render on submit, and
 accumulation of selections across sequential modal submits.
 
-These tests use ``_simulate_modal_submit`` to inject ``CheckboxGroup._values``
+These tests use ``_simulate_modal_submit`` to inject ``Select._values``
 directly, which mirrors the internal ``_handle_submit`` path at
-``.venv/Lib/site-packages/discord/ui/checkbox.py:L262-L265``.  Discord sets
-``_values`` at interaction time; simulating that injection is the only way to
-exercise ``on_submit`` without a live Gateway connection.
+``.venv/Lib/site-packages/discord/ui/select.py:L379``.  Discord writes
+selected option values into ``self._values`` at interaction time;
+simulating that injection is the only way to exercise ``on_submit``
+without a live Gateway connection.
 """
 
 from __future__ import annotations
@@ -140,21 +141,21 @@ def _simulate_modal_submit(
     modal: EditPreferencesModal,
     checked_ids: list[int],
 ) -> None:
-    """Inject submitted values into the modal's CheckboxGroup, simulating Discord.
+    """Inject submitted values into the modal's Select, simulating Discord.
 
-    Discord calls ``CheckboxGroup._handle_submit`` on interaction receipt,
+    Discord calls ``BaseSelect._handle_item_call`` on interaction receipt,
     which writes ``data['values']`` into ``self._values``
-    (``.venv/Lib/site-packages/discord/ui/checkbox.py:L262-L265``).
+    (``.venv/Lib/site-packages/discord/ui/select.py:L379``).
     We replicate that by setting ``_values`` directly, which is the only
     stable injection point short of a live Gateway connection.
 
     Args:
         modal: The :class:`EditPreferencesModal` instance to simulate a
             submit on.
-        checked_ids: The condition IDs the user checked in the modal.
-            These become the stringified values in ``CheckboxGroup._values``.
+        checked_ids: The condition IDs the user selected in the modal.
+            These become the stringified values in ``Select._values``.
     """
-    modal.group._values = [str(cid) for cid in checked_ids]
+    modal.select._values = [str(cid) for cid in checked_ids]  # type: ignore[attr-defined]
 
 
 def _build_modal(
@@ -203,49 +204,93 @@ def _build_modal(
 # ---------------------------------------------------------------------------
 
 
-def test_checkbox_group_option_labels_match_descriptions() -> None:
-    """CheckboxGroup option labels equal the condition descriptions."""
+def test_modal_child_is_label() -> None:
+    """The modal's single child is a discord.ui.Label (type 18)."""
     modal, _ = _build_modal()
-    labels = [opt.label for opt in modal.group.options]
-    expected = [c["description"] for c in _PAGE_A.conditions]
+    assert len(modal.children) == 1
+    assert isinstance(modal.children[0], discord.ui.Label)
+
+
+def test_label_wraps_select() -> None:
+    """The Label's component is a discord.ui.Select (string-select)."""
+    modal, _ = _build_modal()
+    label = modal.children[0]
+    assert isinstance(label, discord.ui.Label)
+    assert isinstance(label.component, discord.ui.Select)
+
+
+def test_select_accessible_via_modal_select_attr() -> None:
+    """modal.select is the same object as the Label's wrapped Select."""
+    modal, _ = _build_modal()
+    label = modal.children[0]
+    assert isinstance(label, discord.ui.Label)
+    assert modal.select is label.component
+
+
+def test_select_option_labels_match_descriptions() -> None:
+    """Select option labels equal descriptions up to 100 chars with ellipsis.
+
+    For descriptions that fit within 100 chars the label is unchanged.
+    For descriptions that exceed 100 chars the label is truncated to 99
+    chars with a trailing "…" (U+2026) so the total is exactly 100 chars.
+    """
+    modal, _ = _build_modal()
+    labels = [opt.label for opt in modal.select.options]
+    expected = [str(c["description"])[:100] for c in _PAGE_A.conditions]
     assert labels == expected
 
 
-def test_checkbox_group_option_values_are_stringified_ids() -> None:
-    """CheckboxGroup option values are stringified condition IDs."""
+def test_select_option_label_gets_ellipsis_when_truncated() -> None:
+    """A 200-char description is rendered as desc[:99] + "…" (total 100 chars)."""
+    long_desc = "X" * 200
+    cond_long: dict[str, Any] = {
+        "id": 99,
+        "condition_type": "other",
+        "description": long_desc,
+        "stronghold_level": 1,
+    }
+    page_long = ModalPage(label="Overflow", conditions=[cond_long])
+    modal, _ = _build_modal(page=page_long, pages=[("Overflow", [cond_long])])
+    label = modal.select.options[0].label
+    assert len(label) == 100
+    assert label == "X" * 99 + "…"
+
+
+def test_select_option_values_are_stringified_ids() -> None:
+    """Select option values are stringified condition IDs."""
     modal, _ = _build_modal()
-    values = [opt.value for opt in modal.group.options]
+    values = [opt.value for opt in modal.select.options]
     expected = [str(c["id"]) for c in _PAGE_A.conditions]
     assert values == expected
 
 
-def test_checkbox_group_defaults_true_for_selected_ids() -> None:
+def test_select_defaults_true_for_selected_ids() -> None:
     """Options whose IDs are True in selections have default=True."""
     # id=1 selected, id=2 not selected.
     selections = {1: True, 2: False}
     modal, _ = _build_modal(selections=selections)
-    opts_by_value = {opt.value: opt for opt in modal.group.options}
+    opts_by_value = {opt.value: opt for opt in modal.select.options}
     assert opts_by_value["1"].default is True
     assert opts_by_value["2"].default is False
 
 
-def test_checkbox_group_default_false_when_id_absent_from_selections() -> None:
+def test_select_default_false_when_id_absent_from_selections() -> None:
     """Options whose IDs are absent from selections have default=False."""
     modal, _ = _build_modal(selections={})
-    for opt in modal.group.options:
+    for opt in modal.select.options:
         assert opt.default is False
 
 
-def test_checkbox_group_min_values_is_zero() -> None:
-    """CheckboxGroup min_values is 0 (allow deselecting everything)."""
+def test_select_min_values_is_zero() -> None:
+    """Select min_values is 0 (allow deselecting everything)."""
     modal, _ = _build_modal()
-    assert modal.group.min_values == 0
+    assert modal.select.min_values == 0
 
 
-def test_checkbox_group_max_values_equals_option_count() -> None:
-    """CheckboxGroup max_values equals the number of options on the page."""
+def test_select_max_values_equals_option_count() -> None:
+    """Select max_values equals the number of options on the page."""
     modal, _ = _build_modal()
-    assert modal.group.max_values == len(_PAGE_A.conditions)
+    assert modal.select.max_values == len(_PAGE_A.conditions)
 
 
 def test_modal_title_is_page_label() -> None:
@@ -261,6 +306,19 @@ def test_modal_title_truncated_to_45_chars() -> None:
     modal, _ = _build_modal(page=page)
     assert len(modal.title) <= _MODAL_TITLE_LIMIT
     assert modal.title == long_label[:_MODAL_TITLE_LIMIT]
+
+
+def test_select_custom_id_stays_within_discord_limit() -> None:
+    """custom_id is at most 100 chars even when page.label is very long.
+
+    Discord's custom_id field is capped at 100 characters.  The prefix
+    "post_conditions_select_" is 23 chars; the page label is capped at 70
+    chars, so the worst-case total is 93 chars.
+    """
+    long_label = "X" * 200
+    page = ModalPage(label=long_label, conditions=[_COND_A1])
+    modal, _ = _build_modal(page=page, pages=[("X" * 200, [_COND_A1])])
+    assert len(modal.select.custom_id) <= 100
 
 
 # ---------------------------------------------------------------------------
