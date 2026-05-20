@@ -67,8 +67,7 @@ def split_by_meta_group(
     objects. Pages from different meta-groups are never merged.
 
     Each GridPage's ``conditions`` list is sorted by
-    ``(condition_type, id)`` ascending — the same deterministic
-    ordering used by :func:`~.modal_layout.split_meta_for_modals`.
+    ``(condition_type, id)`` ascending for deterministic ordering.
 
     Args:
         conditions: Flat list of PostConditionResponse dicts. Each

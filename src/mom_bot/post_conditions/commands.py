@@ -40,7 +40,7 @@ from mom_bot.post_conditions.client import (
     SiegeWebNotFoundError,
 )
 from mom_bot.post_conditions.grouping import group_by_meta
-from mom_bot.post_conditions.views import EditPreferencesView
+from mom_bot.post_conditions.views import PostConditionsGridView
 
 __all__ = [
     "post_conditions_catalog",
@@ -184,7 +184,7 @@ async def post_conditions_set(
 
     Defers the interaction immediately to satisfy Discord's 3-second deadline.
     Fetches both the full catalog and the user's current preferences, then
-    opens an :class:`~mom_bot.post_conditions.views.EditPreferencesView`
+    opens a :class:`~mom_bot.post_conditions.views.PostConditionsGridView`
     pre-populated with the user's existing selections.  404 on the initial
     GET surfaces a link-your-account message without opening the view.
 
@@ -223,9 +223,9 @@ async def post_conditions_set(
         await interaction.followup.send(_OPS_ERROR_MSG, ephemeral=True)
         return
 
-    # EditPreferencesView expects preference IDs (list[int]), not full dicts.
+    # PostConditionsGridView expects preference IDs (list[int]), not full dicts.
     pref_ids = [int(p["id"]) for p in prefs]
-    view = EditPreferencesView(
+    view = PostConditionsGridView(
         catalog=catalog,
         preferences=pref_ids,
         discord_id=discord_id,

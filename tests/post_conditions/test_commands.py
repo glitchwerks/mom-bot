@@ -22,7 +22,7 @@ from mom_bot.post_conditions.commands import (
     post_conditions_set,
     register,
 )
-from mom_bot.post_conditions.views import EditPreferencesView
+from mom_bot.post_conditions.views import PostConditionsGridView
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,12 +34,14 @@ _TOKEN = "secret-bot-token"
 _CATALOG: list[dict[str, Any]] = [
     {
         "id": 5,
+        "label": "Only HP Champions can be used.",
         "description": "Only HP Champions can be used.",
         "stronghold_level": 1,
         "condition_type": "role",
     },
     {
         "id": 12,
+        "label": "Only Barbarian Champions can be used.",
         "description": "Only Barbarian Champions can be used.",
         "stronghold_level": 1,
         "condition_type": "faction",
@@ -49,6 +51,7 @@ _CATALOG: list[dict[str, Any]] = [
 _PREFS: list[dict[str, Any]] = [
     {
         "id": 5,
+        "label": "Only HP Champions can be used.",
         "description": "Only HP Champions can be used.",
         "stronghold_level": 1,
         "condition_type": "role",
@@ -278,7 +281,7 @@ async def test_set_command_defers_before_fetching() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.EditPreferencesView",
+        "mom_bot.post_conditions.commands.PostConditionsGridView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
@@ -298,7 +301,7 @@ async def test_set_command_replies_via_followup() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.EditPreferencesView",
+        "mom_bot.post_conditions.commands.PostConditionsGridView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
@@ -319,7 +322,7 @@ async def test_set_command_uses_invoking_user_id() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.EditPreferencesView",
+        "mom_bot.post_conditions.commands.PostConditionsGridView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
@@ -340,7 +343,7 @@ async def test_set_command_sends_ephemeral_reply() -> None:
     siege_client = _make_client()
 
     with patch(
-        "mom_bot.post_conditions.commands.EditPreferencesView",
+        "mom_bot.post_conditions.commands.PostConditionsGridView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
@@ -371,17 +374,17 @@ async def test_set_command_404_shows_link_account_guidance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_command_opens_edit_preferences_view() -> None:
-    """/post-conditions-set opens an EditPreferencesView (not PostConditionsView).
+async def test_set_command_opens_grid_view() -> None:
+    """/post-conditions-set opens a PostConditionsGridView.
 
-    The view= kwarg on followup.send must be an EditPreferencesView instance
+    The view= kwarg on followup.send must be a PostConditionsGridView instance
     and the embed= kwarg must be a discord.Embed from initial_embed().
     """
     interaction = _make_interaction()
     siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
 
     with patch(
-        "mom_bot.post_conditions.commands.EditPreferencesView",
+        "mom_bot.post_conditions.commands.PostConditionsGridView",
         autospec=True,
     ) as MockView:
         mock_view_instance = MagicMock()
@@ -397,7 +400,7 @@ async def test_set_command_opens_edit_preferences_view() -> None:
     ), "followup.send must include embed= from initial_embed()"
     assert (
         call_kwargs.get("view") is mock_view_instance
-    ), "followup.send view= must be the EditPreferencesView instance"
+    ), "followup.send view= must be the PostConditionsGridView instance"
     mock_view_instance.initial_embed.assert_called_once()
 
 
@@ -405,8 +408,8 @@ async def test_set_command_opens_edit_preferences_view() -> None:
 async def test_set_command_initial_embed_reflects_preexisting_selections() -> None:
     """/post-conditions-set embed description is not 'None selected yet.' when prefs exist.
 
-    Exercises the real EditPreferencesView (no mock) to confirm the embed body
-    built from existing preferences reflects pre-existing selections.
+    Exercises the real PostConditionsGridView (no mock) to confirm the embed
+    body built from existing preferences reflects pre-existing selections.
     """
     interaction = _make_interaction()
     siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
@@ -441,11 +444,11 @@ def test_register_attaches_commands_to_tree() -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_command_attaches_real_edit_preferences_view() -> None:
-    """Integration: real EditPreferencesView is constructed and attached to followup.send.
+async def test_set_command_attaches_real_grid_view() -> None:
+    """Integration: real PostConditionsGridView is constructed and attached to followup.send.
 
-    Exercises the command end-to-end without mocking EditPreferencesView so
-    that the isinstance check is against the concrete class, not a mock.
+    Exercises the command end-to-end without mocking PostConditionsGridView
+    so that the isinstance check is against the concrete class, not a mock.
     """
     interaction = _make_interaction()
     siege_client = _make_client(catalog=_CATALOG, prefs=_PREFS)
@@ -453,4 +456,4 @@ async def test_set_command_attaches_real_edit_preferences_view() -> None:
     await post_conditions_set(interaction, siege_client=siege_client)
 
     call_kwargs = interaction.followup.send.call_args[1]
-    assert isinstance(call_kwargs["view"], EditPreferencesView)
+    assert isinstance(call_kwargs["view"], PostConditionsGridView)

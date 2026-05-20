@@ -1334,7 +1334,7 @@ git commit -m "feat(#145): PostConditionsGridView scaffold + toggle/nav buttons"
 **Files:**
 - Modify: `tests/post_conditions/test_views.py`
 
-- [ ] **Step 1: Add the Save callback test.**
+- [x] **Step 1: Add the Save callback test.**
 
 ```python
 import pytest
@@ -1380,9 +1380,9 @@ async def test_save_callback_puts_selected_ids_and_strips_view() -> None:
     assert kwargs["view"] is None
 ```
 
-- [ ] **Step 2: Run.** Expected: PASS.
+- [x] **Step 2: Run.** Expected: PASS.
 
-- [ ] **Step 3: Add the Cancel callback test.**
+- [x] **Step 3: Add the Cancel callback test.**
 
 ```python
 @pytest.mark.asyncio
@@ -1414,9 +1414,9 @@ async def test_cancel_callback_makes_no_client_call_and_strips_view() -> None:
     assert kwargs["embed"] is None
 ```
 
-- [ ] **Step 4: Run.** Expected: PASS.
+- [x] **Step 4: Run.** Expected: PASS.
 
-- [ ] **Step 5: Add the Save-error test.**
+- [x] **Step 5: Add the Save-error test.**
 
 ```python
 @pytest.mark.asyncio
@@ -1447,9 +1447,9 @@ async def test_save_callback_handles_siege_web_error() -> None:
     interaction.response.edit_message.assert_not_awaited()
 ```
 
-- [ ] **Step 6: Run.** Expected: PASS.
+- [x] **Step 6: Run.** Expected: PASS.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add tests/post_conditions/test_views.py
@@ -1471,7 +1471,7 @@ Apply `refactoring-discipline` — deletions in this phase change no external be
 - Delete: `tests/post_conditions/test_modal.py`
 - Delete: `tests/post_conditions/test_modal_layout.py`
 
-- [ ] **Step 1: Update `commands.py:L226-L238`.**
+- [x] **Step 1: Update `commands.py:L226-L238`.**
 
 Replace:
 
@@ -1516,7 +1516,7 @@ And update the import at the top of `commands.py`:
 from mom_bot.post_conditions.views import PostConditionsGridView
 ```
 
-- [ ] **Step 1b: Update the module-level import in `tests/post_conditions/test_commands.py:L25`.**
+- [x] **Step 1b: Update the module-level import in `tests/post_conditions/test_commands.py:L25`.**
 
 This step MUST run before any test command in this phase. When Phase 4 Step 5 deletes
 `EditPreferencesView` from `views.py`, any file that still names it at import time will
@@ -1539,7 +1539,7 @@ If `test_commands.py` references `EditPreferencesView` in any other context (e.g
 `isinstance(...)` assertion, a type hint, a patched attribute), update those references
 in this same step.
 
-- [ ] **Step 2: Update `test_commands.py` assertions.** Replace any assertion that names `EditPreferencesView` with `PostConditionsGridView`. Drop any assertion that inspects modal-specific behavior (e.g. checking `view._modal_pages`). Keep all error-path tests (404 → link msg, AuthError → ops msg, generic Exception → ops msg). Add:
+- [x] **Step 2: Update `test_commands.py` assertions.** Replace any assertion that names `EditPreferencesView` with `PostConditionsGridView`. Drop any assertion that inspects modal-specific behavior (e.g. checking `view._modal_pages`). Keep all error-path tests (404 → link msg, AuthError → ops msg, generic Exception → ops msg). Add:
 
 ```python
 @pytest.mark.asyncio
@@ -1552,13 +1552,13 @@ async def test_post_conditions_set_uses_grid_view() -> None:
     assert isinstance(sent_view, PostConditionsGridView)
 ```
 
-- [ ] **Step 3: Run command tests.** Expected: PASS.
+- [x] **Step 3: Run command tests.** Expected: PASS.
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/post_conditions/test_commands.py -v
 ```
 
-- [ ] **Step 4: Delete `modal_layout.py`.**
+- [x] **Step 4: Delete `modal_layout.py`.**
 
 ```bash
 git rm src/mom_bot/post_conditions/modal_layout.py
@@ -1566,7 +1566,7 @@ git rm tests/post_conditions/test_modal_layout.py
 git rm tests/post_conditions/test_modal.py
 ```
 
-- [ ] **Step 5: In `views.py`, delete:**
+- [x] **Step 5: In `views.py`, delete:**
   - `EditPreferencesModal` (L205-L370)
   - `_EditMetaButton` (L377-L417)
   - `_DismissButton` (L420-L436)
@@ -1574,7 +1574,7 @@ git rm tests/post_conditions/test_modal.py
   - `_selections_to_meta_keyed` (L70-L106) — superseded by `_flat_to_meta_keyed`
   - The import of `ModalPage, split_meta_for_modals` (L27)
 
-- [ ] **Step 6: Update `__all__` in `views.py`** (currently L29-L33):
+- [x] **Step 6: Update `__all__` in `views.py`** (currently L29-L33):
 
 ```python
 __all__ = [
@@ -1583,17 +1583,17 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 7: In `test_views.py`, delete every test that imports `EditPreferencesModal`, `_EditMetaButton`, `_DismissButton`, `EditPreferencesView`, or `_selections_to_meta_keyed`.** Keep:
+- [x] **Step 7: In `test_views.py`, delete every test that imports `EditPreferencesModal`, `_EditMetaButton`, `_DismissButton`, `EditPreferencesView`, or `_selections_to_meta_keyed`.** Keep:
   - All `build_summary_embed` tests.
   - All `PostConditionsGridView` tests added in Phases 2-3.
 
-- [ ] **Step 8: Run the full post_conditions suite.** Expected: ALL PASS, no skips.
+- [x] **Step 8: Run the full post_conditions suite.** Expected: ALL PASS, no skips.
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/post_conditions/ -v
 ```
 
-- [ ] **Step 9: Commit.** CLAUDE.md forbids `git add -A` — stage explicit paths only. The Phase 4 file set is deterministic; both the modifications and the deletions are listed below.
+- [x] **Step 9: Commit.** CLAUDE.md forbids `git add -A` — stage explicit paths only. The Phase 4 file set is deterministic; both the modifications and the deletions are listed below.
 
 ```bash
 git add \
