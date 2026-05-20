@@ -540,6 +540,19 @@ async def test_sequential_modal_submits_accumulate_selections() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_select_required_is_false_for_modal_compat() -> None:
+    """Discord rejects required=True + min_values=0 inside a Label payload.
+
+    Source: live Discord API error captured 2026-05-20 — error code 50035,
+    "data.components.0.component.min_values: Components marked as required
+    cannot have a min_values of 0". discord.ui.Select defaults required=True
+    (.venv/Lib/site-packages/discord/ui/select.py:L475), so the modal must
+    construct with required=False explicitly.
+    """
+    modal, _ = _build_modal(page=_PAGE_A, selections={})
+    assert modal.select.required is False
+
+
 async def test_on_submit_passes_string_discord_id_to_client() -> None:
     """set_my_preferences receives a str discord_id, not an int.
 

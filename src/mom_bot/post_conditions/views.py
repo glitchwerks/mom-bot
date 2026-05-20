@@ -304,6 +304,11 @@ class EditPreferencesModal(discord.ui.Modal):
             placeholder=placeholder,
             min_values=0,
             max_values=len(options),
+            # Discord rejects required=True + min_values=0 inside a Label
+            # payload (error code 50035). discord.ui.Select defaults
+            # required=True (.venv/Lib/site-packages/discord/ui/select.py:L475),
+            # so we must set it explicitly.
+            required=False,
             options=options,
             custom_id=f"post_conditions_select_{safe_label}",
         )
