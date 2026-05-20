@@ -848,7 +848,7 @@ git commit -m "feat(#145): add discord_display.short_label + canonical table"
 - Modify: `src/mom_bot/post_conditions/views.py`
 - Modify: `tests/post_conditions/test_views.py`
 
-- [ ] **Step 1: Write the failing test for view construction.** Add to `tests/post_conditions/test_views.py`:
+- [x] **Step 1: Write the failing test for view construction.** Add to `tests/post_conditions/test_views.py`:
 
 ```python
 def test_grid_view_construction_seeds_selections_from_preferences() -> None:
@@ -872,9 +872,9 @@ def test_grid_view_construction_seeds_selections_from_preferences() -> None:
     assert len(view._pages) == 2
 ```
 
-- [ ] **Step 2: Run.** Expected: FAIL (ImportError).
+- [x] **Step 2: Run.** Expected: FAIL (ImportError).
 
-- [ ] **Step 3: Add the new view class to `views.py`.** Place after the existing `build_summary_embed` (do not delete the modal code yet — that happens in Phase 4). Add imports at the top:
+- [x] **Step 3: Add the new view class to `views.py`.** Place after the existing `build_summary_embed` (do not delete the modal code yet — that happens in Phase 4). Add imports at the top:
 
 ```python
 # At top of views.py, alongside existing imports:
@@ -1146,13 +1146,13 @@ class CancelButton(discord.ui.Button["PostConditionsGridView"]):
         )
 ```
 
-- [ ] **Step 4: Run the construction test.** Expected: PASS.
+- [x] **Step 4: Run the construction test.** Expected: PASS.
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests/post_conditions/test_views.py::test_grid_view_construction_seeds_selections_from_preferences -v
 ```
 
-- [ ] **Step 5: Add component-count assertion test.**
+- [x] **Step 5: Add component-count assertion test.**
 
 ```python
 def test_grid_view_component_count_within_25() -> None:
@@ -1189,9 +1189,9 @@ def test_grid_view_toggle_button_style_reflects_selection() -> None:
     assert by_id[2].style == discord.ButtonStyle.secondary
 ```
 
-- [ ] **Step 6: Run.** Expected: 2 PASS.
+- [x] **Step 6: Run.** Expected: 2 PASS.
 
-- [ ] **Step 7: Add nav-disable test.**
+- [x] **Step 7: Add nav-disable test.**
 
 ```python
 def test_grid_view_prev_disabled_on_first_page_next_disabled_on_last() -> None:
@@ -1218,9 +1218,9 @@ def test_grid_view_prev_disabled_on_first_page_next_disabled_on_last() -> None:
     assert navs["next"].disabled is True
 ```
 
-- [ ] **Step 8: Run.** Expected: PASS.
+- [x] **Step 8: Run.** Expected: PASS.
 
-- [ ] **Step 8b: Add the embed-title meta-group-header test (§ 3.11).**
+- [x] **Step 8b: Add the embed-title meta-group-header test (§ 3.11).**
 
 ```python
 def test_embed_title_carries_meta_group_header_for_current_page() -> None:
@@ -1247,7 +1247,7 @@ def test_embed_title_carries_meta_group_header_for_current_page() -> None:
     assert embed.title == "Editing — Role, Affinity, Rarity (page 2/2)"
 ```
 
-- [ ] **Step 8c: Add the button-label uses-short-label test (§ 3.10).**
+- [x] **Step 8c: Add the button-label uses-short-label test (§ 3.10).**
 
 ```python
 def test_toggle_button_label_uses_short_label_not_canonical() -> None:
@@ -1265,7 +1265,7 @@ def test_toggle_button_label_uses_short_label_not_canonical() -> None:
     assert toggle.label == "Sylvan Watchers"
 ```
 
-- [ ] **Step 9: Add the sub-pagination summary-embed dedup test (B1 regression guard).**
+- [x] **Step 9: Add the sub-pagination summary-embed dedup test (B1 regression guard).**
 
 Per-meta-group pagination (§ 3.1) makes the cross-meta-group double-heading bug
 structurally impossible at current data sizes (every page already belongs to a
@@ -1318,9 +1318,9 @@ def test_summary_pages_merges_subpaginated_meta_groups() -> None:
     )
 ```
 
-- [ ] **Step 10: Run.** Expected: PASS.
+- [x] **Step 10: Run.** Expected: PASS.
 
-- [ ] **Step 11: Commit.**
+- [x] **Step 11: Commit.**
 
 ```bash
 git add src/mom_bot/post_conditions/views.py tests/post_conditions/test_views.py
