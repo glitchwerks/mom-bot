@@ -505,6 +505,84 @@ Automation tracked in [#83](https://github.com/glitchwerks/mom-bot/issues/83); s
 
 ---
 
+## Dev-laptop ad-hoc Postgres access
+
+> **Why this is a runbook step, not Bicep:** The `operatorIpAddress` param was
+> removed from Bicep in [#166](https://github.com/glitchwerks/mom-bot/issues/166).
+> Operator IPs change frequently (VPNs, ISP DHCP rotation, travel) — managing
+> them in Bicep means every IP change triggers a Bicep deploy. Instead, open a
+> rule when you need it and delete it when you are done. The Postgres server
+> and the `allow-cae-egress` firewall rule are still Bicep-managed; only
+> operator ad-hoc rules are manual.
+
+### Open a firewall rule (when you need DB access)
+
+```powershell
+# 1. Find your current public egress IP.
+$MyIp = (Invoke-WebRequest -Uri 'https://api.ipify.org').Content
+Write-Host "My IP: $MyIp"
+
+# 2. Find the Postgres server name (deterministic hash of the RG resource ID).
+$PgServer = az postgres flexible-server list `
+  --resource-group mom-bot `
+  --query "[0].name" -o tsv
+Write-Host "PG server: $PgServer"
+
+# 3. Open a firewall rule scoped to your IP only.
+#    Replace <your-handle> with your GitHub handle or initials (e.g. cbeaulieu).
+az postgres flexible-server firewall-rule create `
+  --resource-group mom-bot `
+  --name $PgServer `
+  --rule-name "dev-<your-handle>" `
+  --start-ip-address $MyIp `
+  --end-ip-address $MyIp
+```
+
+The rule is effective within ~30 seconds.
+
+### Remove the firewall rule (when you are done)
+
+Always delete the rule when you finish your session. Do not leave developer IP
+rules open indefinitely — they widen the attack surface on a password-auth-disabled
+(Entra-only) server that is otherwise narrowly scoped.
+
+```powershell
+az postgres flexible-server firewall-rule delete `
+  --resource-group mom-bot `
+  --name $PgServer `
+  --rule-name "dev-<your-handle>" `
+  --yes
+```
+
+### Verify the rule is gone
+
+```powershell
+az postgres flexible-server firewall-rule list `
+  --resource-group mom-bot `
+  --name $PgServer `
+  --output table
+```
+
+Expected output shows only `allow-cae-egress` (the CAE static IP rule, which is
+Bicep-managed). Any `dev-*` rules indicate a session was not cleaned up.
+
+### If your IP changes mid-session
+
+Delete the old rule and create a new one with the updated IP:
+
+```powershell
+$MyIp = (Invoke-WebRequest -Uri 'https://api.ipify.org').Content
+az postgres flexible-server firewall-rule delete `
+  --resource-group mom-bot --name $PgServer `
+  --rule-name "dev-<your-handle>" --yes
+az postgres flexible-server firewall-rule create `
+  --resource-group mom-bot --name $PgServer `
+  --rule-name "dev-<your-handle>" `
+  --start-ip-address $MyIp --end-ip-address $MyIp
+```
+
+---
+
 ## Notes
 
 ### Placeholder container image

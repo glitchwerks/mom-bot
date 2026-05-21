@@ -16,8 +16,10 @@
 // Networking: Public access + specific firewall rules. AllowAllAzureServices
 //   (0.0.0.0) is NOT used — it admits all Azure tenant IPs (spike #101 §
 //   Bonus Finding 4 / docs/spike/2026-05-17-postgres-aad-findings.md).
-//   Instead, pin operator IP and CAE static egress IP. Task 1.4 (CAE egress
-//   firewall rule) is folded into this module per the merged plan.
+//   CAE static egress IP is pinned here (Task 1.4 folded into Phase 1 module)
+//   so the rule is in place before any connection attempt at Phase 4 cutover.
+//   Operator ad-hoc access is NOT managed by Bicep — see infra/aad-runbook.md
+//   "Dev-laptop ad-hoc Postgres access" for the runbook (issue #166).
 
 @description('Azure region for the Postgres server.')
 param location string
@@ -38,9 +40,6 @@ param managedIdentityPrincipalId string
 
 @description('Display name of the UAMI (used as the Entra admin login name).')
 param managedIdentityName string
-
-@description('Operator egress IP address to whitelist in the firewall (single IP; update if the operator\'s IP changes).')
-param operatorIpAddress string
 
 @description('Static egress IP of the Container Apps Environment (cae-mom-bot-eastus2). Used to allow the bot to connect to Postgres. Retrieve with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query properties.staticIp -o tsv')
 param caeEgressIp string
@@ -82,18 +81,6 @@ resource db 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   properties: {
     charset: 'UTF8'
     collation: 'en_US.utf8'
-  }
-}
-
-// Firewall: operator IP only (not 0.0.0.0 — see networking decision above).
-// GHA runner IPs are added transiently at deploy time and removed after migration.
-// Update operatorIpAddress in main.bicepparam if the operator's egress changes.
-resource fwOperator 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
-  parent: pg
-  name: 'operator-ip'
-  properties: {
-    startIpAddress: operatorIpAddress
-    endIpAddress: operatorIpAddress
   }
 }
 

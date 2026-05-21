@@ -32,11 +32,6 @@ param ghaServicePrincipalObjectId = readEnvironmentVariable('GHA_SP_OBJECT_ID', 
 // PostgreSQL firewall parameters (Phase 1, issue #104 / epic #91)
 // ---------------------------------------------------------------------------
 
-// Operator egress IP for Postgres firewall.
-// Look up your current egress IP with: (Invoke-WebRequest -Uri 'https://api.ipify.org').Content
-// Or: curl -s https://api.ipify.org
-param operatorIpAddress = 'CHANGE_ME_OPERATOR_IP'
-
 // Static egress IP of the CAE environment for Postgres firewall.
 // Look up with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query 'properties.staticIp' -o tsv
 param caeEgressIp = 'CHANGE_ME_CAE_STATIC_IP'

@@ -44,9 +44,6 @@ param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 @description('Tenant ID — needed for Postgres AAD admin configuration.')
 param tenantId string = subscription().tenantId
 
-@description('Operator egress IP for Postgres firewall whitelist. Update if operator IP changes.')
-param operatorIpAddress string
-
 @description('Static egress IP of the Container Apps Environment (cae-mom-bot-eastus2) for Postgres firewall whitelist. Retrieve with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query properties.staticIp -o tsv')
 param caeEgressIp string
 
@@ -99,7 +96,6 @@ module postgres 'modules/postgres.bicep' = {
     tenantId: tenantId
     managedIdentityPrincipalId: identity.outputs.principalId
     managedIdentityName: managedIdentityName
-    operatorIpAddress: operatorIpAddress
     caeEgressIp: caeEgressIp
   }
 }
