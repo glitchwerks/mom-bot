@@ -1,0 +1,115 @@
+name: Deploy infra (Bicep apply)
+
+# WARNING: This workflow MUTATES live Azure infrastructure.
+# It runs `az deployment sub create` (no --what-if) against the production
+# subscription. Treat every manual trigger as a live infrastructure change.
+#
+# Trigger: workflow_dispatch ONLY (v1).
+# Auto-trigger on push-to-main when infra/** changes was an open question in
+# #83 (blast radius concern). Deferred to a follow-up PR once this manual
+# workflow has been exercised and trusted.
+#
+# What-if preview (informational, PR-gated) lives in infra-what-if.yml — leave
+# that workflow alone. This file is the apply companion.
+#
+# Reference: https://github.com/glitchwerks/mom-bot/issues/83
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to check out. Defaults to HEAD of `main`. Must match a SHA present on main."
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: infra-deploy
+  cancel-in-progress: false  # Do NOT cancel an in-flight deployment — partial Bicep applies are dangerous.
+
+permissions:
+  id-token: write  # required for OIDC federated login to Azure
+  contents: read   # actions/checkout
+
+jobs:
+  deploy:
+    name: Apply Bicep to prod subscription
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          ref: ${{ inputs.commit_sha != '' && inputs.commit_sha || github.ref }}
+
+      - name: Azure login (OIDC — no client secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve SP object ID for Bicep param
+        run: |
+          # az ad sp show returns the *service principal* object ID
+          # (the enterprise-app object in the tenant) — distinct from the
+          # *app registration* object ID returned by `az ad app show`.
+          # Bicep role assignments require the SP object ID, which is
+          # what main.bicepparam expects via GHA_SP_OBJECT_ID.
+          SP_OID=$(az ad sp show --id ${{ vars.AZURE_CLIENT_ID }} --query id -o tsv)
+          echo "GHA_SP_OBJECT_ID=$SP_OID" >> "$GITHUB_ENV"
+
+      - name: Verify GHA_SP_OBJECT_ID export persisted
+        run: |
+          test -n "$GHA_SP_OBJECT_ID" || { echo "::error::GHA_SP_OBJECT_ID empty in subsequent step"; exit 1; }
+          echo "SP OID present (length=${#GHA_SP_OBJECT_ID})"
+
+      - name: Resolve current live container image
+        run: |
+          # Fetch the image currently running in prod so the bicepparam's
+          # readEnvironmentVariable resolves to the live image rather than
+          # the quickstart placeholder — prevents a phantom containerImage
+          # diff on every apply.
+          set +e
+          IMG=$(az containerapp show --name ca-mom-bot --resource-group mom-bot \
+            --query "properties.template.containers[0].image" -o tsv 2>&1)
+          RC=$?
+          set -e
+          if [ $RC -ne 0 ]; then
+            echo "::notice::Container app not found (cold-start scenario) — using bicepparam quickstart default"
+            # CONTAINER_IMAGE intentionally left unset; bicepparam's
+            # readEnvironmentVariable('CONTAINER_IMAGE', '<quickstart>')
+            # falls back to the default.
+          else
+            echo "CONTAINER_IMAGE=$IMG" >> "$GITHUB_ENV"
+          fi
+
+      - name: Apply Bicep deployment
+        id: apply
+        run: |
+          az deployment sub create \
+            --location eastus2 \
+            --template-file infra/main.bicep \
+            --parameters infra/main.bicepparam \
+            --subscription ${{ vars.AZURE_SUBSCRIPTION_ID }} \
+            --name "infra-${{ github.run_id }}" \
+            > deploy-output.txt 2>&1
+          RC=$?
+          cat deploy-output.txt
+          exit $RC
+
+      - name: Write deployment summary
+        if: success()
+        run: |
+          {
+            echo "## Bicep deployment succeeded"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Deployment name | \`infra-${{ github.run_id }}\` |"
+            echo "| Subscription | \`${{ vars.AZURE_SUBSCRIPTION_ID }}\` |"
+            echo "| Run | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |"
+            echo
+            echo "To inspect in the Azure portal, navigate to:"
+            echo "\`Subscriptions → ${{ vars.AZURE_SUBSCRIPTION_ID }} → Deployments → infra-${{ github.run_id }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -445,6 +445,34 @@ image to `ca-mom-bot`. First run succeeds if:
 
 ---
 
+## Step 9.5 — Run the infra deploy workflow (post-merge)
+
+`infra-deploy.yml` is the CI/CD counterpart to the manual `az deployment sub create` in Step 5. It runs the same Bicep apply (`infra/main.bicep` + `infra/main.bicepparam`) against the production subscription via OIDC, removing the need for a local `az login` session for infrastructure changes.
+
+**Trigger:** `workflow_dispatch` only (v1 — auto-trigger on infra/** push is deferred, see #83).
+
+**SP role relied on:** `Mom-bot GHA Subscription Deployer` (custom role, subscription scope — granted in Step 4.5). Same OIDC credentials as the existing what-if workflow.
+
+**Inputs:**
+- `commit_sha` (optional) — pin to a specific commit; defaults to HEAD of `main`.
+
+**To invoke:**
+```
+GitHub repo → Actions → Deploy infra (Bicep apply) → Run workflow → Run workflow
+```
+
+The workflow:
+1. Checks out the repo (at `commit_sha` if supplied, else `main` HEAD).
+2. Logs in via OIDC (`mom-bot-gha` app registration — same as `deploy.yml` and `infra-what-if.yml`).
+3. Resolves the SP object ID → `GHA_SP_OBJECT_ID` env var (required by `main.bicepparam`).
+4. Resolves the live container image → `CONTAINER_IMAGE` env var (prevents phantom diffs).
+5. Runs `az deployment sub create` — deployment named `infra-<run_id>` for portal traceability.
+6. Writes a summary to the Actions run page (deployment name + subscription + portal navigation hint).
+
+After the workflow completes, continue to Step 5.5 (Entra admin creation on Postgres) if this is a cold-start or the Postgres server was recreated.
+
+---
+
 ## Step 10 — Manual old-revision deactivation (#96 stopgap)
 
 `activeRevisionsMode: 'Single'` deactivates prior revisions automatically only when
