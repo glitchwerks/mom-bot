@@ -7,7 +7,7 @@ Provides two public callables:
     future slash commands.  Resolves a ``day_number → discord_role_id`` via
     the ``day_role_map`` table, then calls ``Member.add_roles()`` /
     ``Member.remove_roles()`` and returns a :class:`RoleSyncResult`
-    conforming to the wire contract in ``siege-web/docs/webhooks/day-role-sync.md``.
+    conforming to the wire contract in ``glitchwerks/rsl-mom-apps/contracts/day-role-sync.md``.
 
 ``run_preflight``
     Synchronous function called once after the ``day_role_map`` seed
@@ -81,7 +81,7 @@ class RoleSyncResult:
     """Structured result returned by :func:`apply_day_role`.
 
     Conforms to the wire contract response shape defined in
-    ``siege-web/docs/webhooks/day-role-sync.md`` § 3.
+    ``glitchwerks/rsl-mom-apps/contracts/day-role-sync.md`` § 3.
 
     Attributes:
         status: Overall outcome of the operation.  One of:

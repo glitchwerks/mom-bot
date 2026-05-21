@@ -10,9 +10,9 @@ Epic 2.6 delivers automatic Discord role membership for siege day-assignments. W
 **day-role-sync webhook** to mom-bot. Mom-bot — the first conforming receiver of that contract —
 adds or removes the corresponding `Attack Day N` Discord role on the member's account.
 
-The wire contract is defined in `docs/webhooks/day-role-sync.md` inside the
-`glitchwerks/rsl-siege-manager` repo (tracked by `glitchwerks/rsl-siege-manager#400`;
-not yet authored). Siege-web is the producer;
+The wire contract is defined in [`contracts/day-role-sync.md`](https://github.com/glitchwerks/rsl-mom-apps/blob/main/contracts/day-role-sync.md)
+inside the `glitchwerks/rsl-mom-apps` repo (pinned: [`@5576807`](https://github.com/glitchwerks/rsl-mom-apps/blob/5576807101c04a9b595192cee2b9a02aed1c9c12/contracts/day-role-sync.md);
+tracked by `glitchwerks/rsl-siege-manager#400`). Siege-web is the producer;
 mom-bot is one conforming receiver. Switching receivers requires only a configuration change — no
 code change on the siege-web side.
 
