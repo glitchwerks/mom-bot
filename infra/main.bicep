@@ -44,9 +44,6 @@ param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 @description('Tenant ID — needed for Postgres AAD admin configuration.')
 param tenantId string = subscription().tenantId
 
-@description('Static egress IP of the Container Apps Environment (cae-mom-bot-eastus2) for Postgres firewall whitelist. Retrieve with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query properties.staticIp -o tsv')
-param caeEgressIp string
-
 // ---------------------------------------------------------------------------
 // Resource group
 // ---------------------------------------------------------------------------
@@ -86,6 +83,9 @@ module kv 'modules/keyvault.bicep' = {
 
 // ---------------------------------------------------------------------------
 // PostgreSQL (replaces AzureFile + SQLite stopgap — issue #91)
+// Depends implicitly on containerApp because containerAppOutboundIps is
+// sourced from containerApp.outputs.outboundIpAddresses — Bicep resolves
+// the ordering automatically via the symbol reference (issue #120 Part 2).
 // ---------------------------------------------------------------------------
 
 module postgres 'modules/postgres.bicep' = {
@@ -96,7 +96,7 @@ module postgres 'modules/postgres.bicep' = {
     tenantId: tenantId
     managedIdentityPrincipalId: identity.outputs.principalId
     managedIdentityName: managedIdentityName
-    caeEgressIp: caeEgressIp
+    containerAppOutboundIps: containerApp.outputs.outboundIpAddresses
   }
 }
 

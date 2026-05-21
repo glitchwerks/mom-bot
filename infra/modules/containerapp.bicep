@@ -273,3 +273,6 @@ resource roleAssignmentGHA 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 @description('Fully qualified domain name of the Container App (empty when ingress disabled).')
 output fqdn string = ca.properties.configuration.?ingress.?fqdn ?? ''
+
+@description('Outbound IP addresses of the Container App. Used by postgres.bicep to build per-IP firewall rules.')
+output outboundIpAddresses array = ca.properties.outboundIpAddresses
