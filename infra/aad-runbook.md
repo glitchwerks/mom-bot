@@ -188,7 +188,7 @@ See plan `docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md
 
 ## Step 4.6 — Grant SP constrained RBAC Admin at RG scope (issue #167)
 
-`infra-deploy.yml` runs `az deployment sub create`, which causes Bicep to write KV role assignments via the ARM `Microsoft.Authorization/roleAssignments` resource. For that write to succeed, the SP needs `Microsoft.Authorization/roleAssignments/write` at the KV scope. Rather than granting the SP a broad User Access Administrator role (which allows assigning any role), this step grants `Role Based Access Control Administrator` constrained by an ABAC condition that limits the SP to assigning only **Key Vault Secrets User** and **Key Vault Secrets Officer**.
+`infra-deploy.yml` runs `az deployment sub create`, which causes Bicep to write Key Vault (KV) role assignments via the ARM `Microsoft.Authorization/roleAssignments` resource. For that write to succeed, the SP needs `Microsoft.Authorization/roleAssignments/write` at a scope that covers the KV. This step grants the role at RG scope (not KV scope directly) — see design rationale below. Rather than granting the SP a broad User Access Administrator role (which allows assigning any role), this step grants `Role Based Access Control Administrator` constrained by an ABAC condition that limits the SP to assigning only **Key Vault Secrets User** and **Key Vault Secrets Officer**.
 
 **What this grants:**
 - Role: `Role Based Access Control Administrator` (built-in `f58310d9-a9f6-439a-9e8d-f62e7b41a168`)
@@ -213,6 +213,7 @@ The `az role assignment create --condition` flag has a bug on some CLI versions 
 
 ```powershell
 $SUB = az account show --query id -o tsv
+$gha = az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
 $CONDITION = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
 
 # Generate a random assignment GUID
@@ -221,7 +222,7 @@ $ASSIGNMENT_ID = [guid]::NewGuid().ToString()
 $body = @{
   properties = @{
     roleDefinitionId = "/subscriptions/$SUB/providers/Microsoft.Authorization/roleDefinitions/f58310d9-a9f6-439a-9e8d-f62e7b41a168"
-    principalId      = "6fcf4d62-e6da-4819-9667-234a55018fa2"
+    principalId      = $gha
     principalType    = "ServicePrincipal"
     description      = "GHA SP role-assignment authority constrained to KV Secrets User/Officer for infra-deploy.yml"
     condition        = $CONDITION
@@ -240,11 +241,12 @@ If `az role assignment create` works in your environment (future CLI versions ma
 
 ```bash
 SUB=$(az account show --query id -o tsv)
+GHA=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
 CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
 
 az role assignment create \
   --role "Role Based Access Control Administrator" \
-  --assignee-object-id "6fcf4d62-e6da-4819-9667-234a55018fa2" \
+  --assignee-object-id "$GHA" \
   --assignee-principal-type ServicePrincipal \
   --scope "/subscriptions/${SUB}/resourceGroups/mom-bot" \
   --condition "${CONDITION}" \
@@ -273,6 +275,8 @@ Expected output confirms: role is `Role Based Access Control Administrator`, sco
 | Container Apps Contributor | `.../resourceGroups/mom-bot` |
 | Role Based Access Control Administrator | `.../resourceGroups/mom-bot` |
 | Key Vault Secrets Officer | `.../resourceGroups/mom-bot/.../kv-mombot-eastus2` |
+
+> **Note on Contributor + Container Apps Contributor:** Both are confirmed present in the live subscription (verified 2026-05-21). Container Apps Contributor was granted first by Bicep (`infra/modules/containerapp.bicep`) before the broader Contributor role was added as a fallback expedient (see Step 4.5 fallback note). Contributor is a superset of Container Apps Contributor; the narrower role is left in place to avoid disrupting the Bicep-managed assignment — schedule cleanup in a follow-up issue.
 
 **Design rationale:** Granting at RG scope (not KV scope) gives the SP the minimum scope necessary for the Bicep KV role-assignment resource while avoiding subscription-wide RBAC authority. The ABAC condition is the safety layer — without it, RBAC Admin would allow the SP to assign any role to any principal within the RG. See [#167](https://github.com/glitchwerks/mom-bot/issues/167) for the full decision thread.
 
