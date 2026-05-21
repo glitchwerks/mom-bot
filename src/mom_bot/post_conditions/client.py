@@ -10,6 +10,10 @@ Security contract
 -----------------
 - The bot token is stored in a private attribute and never appears in log
   output, exception messages, or response bodies sent to Discord.
+- Per-member endpoints require both an ``X-Acting-Discord-Id`` header
+  (the user's snowflake) and an ``X-Acting-Discord-Username`` header
+  (the canonical ``interaction.user.name``).  Siege-web uses the username
+  to correlate the request to the ``Member.discord_username`` column.
 - A 429 (rate-limit) response triggers up to 3 automatic retries with
   exponential backoff (1 s, 2 s, 4 s).  If a ``Retry-After`` header is
   present and its value is ≤ 30 s, that value is used instead for that
@@ -242,19 +246,28 @@ class SiegeWebClient:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _auth_headers(self, discord_id: str) -> dict[str, str]:
+    def _auth_headers(
+        self,
+        discord_id: str,
+        discord_username: str,
+    ) -> dict[str, str]:
         """Build the auth headers required for the /me/ endpoints.
 
         Args:
             discord_id: The invoking user's Discord snowflake as a string.
+            discord_username: The invoking user's canonical Discord username
+                (``interaction.user.name``).  Forwarded as
+                ``X-Acting-Discord-Username`` so siege-web can correlate
+                the request to the ``Member.discord_username`` column.
 
         Returns:
-            A dict with ``Authorization`` and ``X-Acting-Discord-Id``
-            entries.
+            A dict with ``Authorization``, ``X-Acting-Discord-Id``, and
+            ``X-Acting-Discord-Username`` entries.
         """
         return {
             "Authorization": f"Bearer {self._token}",
             "X-Acting-Discord-Id": discord_id,
+            "X-Acting-Discord-Username": discord_username,
         }
 
     @staticmethod
@@ -454,15 +467,20 @@ class SiegeWebClient:
     async def get_my_preferences(
         self,
         discord_id: str,
+        discord_username: str,
     ) -> list[dict[str, Any]]:
         """Fetch the invoking user's current post-condition preferences.
 
         Calls ``GET /api/members/me/preferences`` with Bearer + Discord-Id
-        auth headers.  A single 429 retry is attempted before raising.
+        + Discord-Username auth headers.  A single 429 retry is attempted
+        before raising.
 
         Args:
             discord_id: The invoking user's Discord snowflake (numeric
                 string).
+            discord_username: The invoking user's canonical Discord username
+                (``interaction.user.name``).  Forwarded as
+                ``X-Acting-Discord-Username`` to siege-web.
 
         Returns:
             A list of PostConditionResponse dicts (may be empty if the user
@@ -476,12 +494,13 @@ class SiegeWebClient:
             SiegeWebRateLimitError: On repeated 429.
         """
         url = f"{self.base_url}/api/members/me/preferences"
-        headers = self._auth_headers(discord_id)
+        headers = self._auth_headers(discord_id, discord_username)
         return await self._call_with_retry("get", url, headers)
 
     async def set_my_preferences(
         self,
         discord_id: str,
+        discord_username: str,
         ids: list[int],
     ) -> list[dict[str, Any]]:
         """Replace the invoking user's post-condition preferences.
@@ -493,6 +512,9 @@ class SiegeWebClient:
         Args:
             discord_id: The invoking user's Discord snowflake (numeric
                 string).
+            discord_username: The invoking user's canonical Discord username
+                (``interaction.user.name``).  Forwarded as
+                ``X-Acting-Discord-Username`` to siege-web.
             ids: The complete desired set of post-condition IDs.  Each ID
                 must exist in siege-web's database.
 
@@ -507,6 +529,6 @@ class SiegeWebClient:
             SiegeWebRateLimitError: On repeated 429.
         """
         url = f"{self.base_url}/api/members/me/preferences"
-        headers = self._auth_headers(discord_id)
+        headers = self._auth_headers(discord_id, discord_username)
         body = {"post_condition_ids": ids}
         return await self._call_with_retry("put", url, headers, json=body)

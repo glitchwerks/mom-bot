@@ -340,6 +340,7 @@ def test_grid_view_construction_seeds_selections_from_preferences() -> None:
         catalog=_GRID_CATALOG_TWO_GROUPS,
         preferences=[1, 3],
         discord_id="123",
+        discord_username="testuser",
         siege_client=object(),
     )
     assert view._selections == {1: True, 2: False, 3: True}
@@ -386,7 +387,11 @@ def test_grid_view_component_count_within_25() -> None:
         for i, lbl in enumerate(twenty_labels, start=1)
     ]
     view = PostConditionsGridView(
-        catalog=catalog, preferences=[], discord_id="x", siege_client=object()
+        catalog=catalog,
+        preferences=[],
+        discord_id="x",
+        discord_username="testuser",
+        siege_client=object(),
     )
     # 20 toggles + 4 nav = 24.
     assert len(view.children) == 24
@@ -400,6 +405,7 @@ def test_grid_view_default_on_toggles_pre_styled_success() -> None:
         catalog=_GRID_CATALOG_FACTION,
         preferences=[1],
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
     toggles = [c for c in view.children if isinstance(c, _ToggleButton)]
@@ -416,6 +422,7 @@ def test_grid_view_embed_title_has_meta_group_header_and_page_indicator() -> Non
         catalog=_GRID_CATALOG_TWO_GROUPS,
         preferences=[],
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
     # Page 0 → Faction & League.
@@ -441,7 +448,11 @@ def test_grid_view_buttons_use_short_labels_not_canonical() -> None:
         }
     ]
     view = PostConditionsGridView(
-        catalog=catalog, preferences=[], discord_id="x", siege_client=object()
+        catalog=catalog,
+        preferences=[],
+        discord_id="x",
+        discord_username="testuser",
+        siege_client=object(),
     )
     toggle = next(c for c in view.children if isinstance(c, _ToggleButton))
     assert toggle.label == "Sylvan Watchers"
@@ -525,6 +536,7 @@ def test_grid_view_button_count_matches_expected_for_19_11_6() -> None:
         catalog=full_catalog,
         preferences=[],
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
     # Page 0: 19 faction toggles + 4 nav.
@@ -547,6 +559,7 @@ def test_grid_view_prev_disabled_on_first_page_next_disabled_on_last() -> None:
         catalog=_GRID_CATALOG_TWO_GROUPS,
         preferences=[],
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
     navs = {n._direction: n for n in view.children if isinstance(n, NavButton)}
@@ -570,6 +583,7 @@ async def test_grid_view_toggle_flips_selection_and_style() -> None:
         catalog=_GRID_CATALOG_FACTION,
         preferences=[],  # starts all OFF
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
 
@@ -603,6 +617,7 @@ async def test_grid_view_nav_changes_page_and_preserves_selections() -> None:
         catalog=_GRID_CATALOG_TWO_GROUPS,
         preferences=[1],  # id 1 ON on page 0
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
     assert view._page_index == 0
@@ -671,6 +686,7 @@ def test_grid_view_b1_regression_subpaginated_meta_renders_heading_once() -> Non
         catalog=catalog,
         preferences=[1, 11],  # one from each sub-page
         discord_id="x",
+        discord_username="testuser",
         siege_client=object(),
     )
     view._pages = pages_subpaged  # type: ignore[misc]
@@ -731,7 +747,11 @@ async def test_save_callback_puts_selected_ids_and_strips_view() -> None:
     siege_client.set_my_preferences = AsyncMock(return_value=[])
 
     view = PostConditionsGridView(
-        catalog=catalog, preferences=[1], discord_id="42", siege_client=siege_client
+        catalog=catalog,
+        preferences=[1],
+        discord_id="42",
+        discord_username="testuser",
+        siege_client=siege_client,
     )
     # User toggles id 3 on, id 1 off (staged).
     view._selections[1] = False
@@ -746,7 +766,9 @@ async def test_save_callback_puts_selected_ids_and_strips_view() -> None:
 
     await save_btn.callback(interaction)
 
-    siege_client.set_my_preferences.assert_awaited_once_with(discord_id="42", ids=[3])
+    siege_client.set_my_preferences.assert_awaited_once_with(
+        discord_id="42", discord_username="testuser", ids=[3]
+    )
     interaction.response.edit_message.assert_awaited_once()
     # view=None in the call → buttons stripped.
     _, kwargs = interaction.response.edit_message.call_args
@@ -770,7 +792,11 @@ async def test_cancel_callback_makes_no_client_call_and_strips_view() -> None:
     siege_client.set_my_preferences = AsyncMock()
 
     view = PostConditionsGridView(
-        catalog=catalog, preferences=[1], discord_id="42", siege_client=siege_client
+        catalog=catalog,
+        preferences=[1],
+        discord_id="42",
+        discord_username="testuser",
+        siege_client=siege_client,
     )
     cancel_btn = next(c for c in view.children if isinstance(c, CancelButton))
 
@@ -806,7 +832,11 @@ async def test_save_callback_handles_siege_web_error() -> None:
     siege_client.set_my_preferences = AsyncMock(side_effect=SiegeWebError("boom"))
 
     view = PostConditionsGridView(
-        catalog=catalog, preferences=[1], discord_id="42", siege_client=siege_client
+        catalog=catalog,
+        preferences=[1],
+        discord_id="42",
+        discord_username="testuser",
+        siege_client=siege_client,
     )
     save_btn = next(c for c in view.children if isinstance(c, SaveButton))
 

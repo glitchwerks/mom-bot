@@ -123,11 +123,15 @@ async def post_conditions_get(
         siege_client: The siege-web HTTP client instance.
     """
     discord_id = str(interaction.user.id)
+    discord_username = interaction.user.name
 
     await interaction.response.defer(ephemeral=True)
 
     try:
-        prefs = await siege_client.get_my_preferences(discord_id=discord_id)
+        prefs = await siege_client.get_my_preferences(
+            discord_id=discord_id,
+            discord_username=discord_username,
+        )
     except SiegeWebNotFoundError:
         await interaction.followup.send(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
         return
@@ -185,13 +189,17 @@ async def post_conditions_set(
         siege_client: The siege-web HTTP client instance.
     """
     discord_id = str(interaction.user.id)
+    discord_username = interaction.user.name
 
     await interaction.response.defer(ephemeral=True)
 
     try:
         catalog, prefs = (
             await siege_client.list_catalog(),
-            await siege_client.get_my_preferences(discord_id=discord_id),
+            await siege_client.get_my_preferences(
+                discord_id=discord_id,
+                discord_username=discord_username,
+            ),
         )
     except SiegeWebNotFoundError:
         await interaction.followup.send(_LINK_YOUR_ACCOUNT_MSG, ephemeral=True)
@@ -217,6 +225,7 @@ async def post_conditions_set(
         catalog=catalog,
         preferences=pref_ids,
         discord_id=discord_id,
+        discord_username=discord_username,
         siege_client=siege_client,
     )
     await interaction.followup.send(

@@ -29,6 +29,7 @@ from mom_bot.post_conditions.views import PostConditionsGridView
 # ---------------------------------------------------------------------------
 
 _DISCORD_ID = 123456789012345678  # integer as discord.py provides
+_DISCORD_USERNAME = "testuser"
 _TOKEN = "secret-bot-token"
 
 _CATALOG: list[dict[str, Any]] = [
@@ -61,11 +62,20 @@ _PREFS: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
-def _make_interaction(discord_id: int = _DISCORD_ID) -> MagicMock:
-    """Build a minimal fake discord.Interaction."""
+def _make_interaction(
+    discord_id: int = _DISCORD_ID,
+    discord_username: str = _DISCORD_USERNAME,
+) -> MagicMock:
+    """Build a minimal fake discord.Interaction.
+
+    Args:
+        discord_id: The Discord user snowflake ID (integer).
+        discord_username: The Discord canonical username (interaction.user.name).
+    """
     interaction = MagicMock(spec=discord.Interaction)
     interaction.user = MagicMock()
     interaction.user.id = discord_id
+    interaction.user.name = discord_username
     interaction.response = MagicMock()
     interaction.response.send_message = AsyncMock()
     interaction.response.defer = AsyncMock()
@@ -209,7 +219,10 @@ async def test_get_command_uses_invoking_user_id() -> None:
 
     await post_conditions_get(interaction, siege_client=siege_client)
 
-    siege_client.get_my_preferences.assert_awaited_once_with(discord_id=str(_DISCORD_ID))
+    siege_client.get_my_preferences.assert_awaited_once_with(
+        discord_id=str(_DISCORD_ID),
+        discord_username=_DISCORD_USERNAME,
+    )
 
 
 @pytest.mark.asyncio
@@ -333,7 +346,10 @@ async def test_set_command_uses_invoking_user_id() -> None:
         await post_conditions_set(interaction, siege_client=siege_client)
 
     # get_my_preferences must have been called with the invoking user's ID.
-    siege_client.get_my_preferences.assert_awaited_once_with(discord_id=str(_DISCORD_ID))
+    siege_client.get_my_preferences.assert_awaited_once_with(
+        discord_id=str(_DISCORD_ID),
+        discord_username=_DISCORD_USERNAME,
+    )
 
 
 @pytest.mark.asyncio

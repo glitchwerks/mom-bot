@@ -37,6 +37,7 @@ from mom_bot.post_conditions.client import (
 _BASE_URL = "https://rslsiege.com"
 _TOKEN = "super-secret-bot-token"
 _DISCORD_ID = "123456789012345678"
+_DISCORD_USERNAME = "testuser"
 
 _SAMPLE_CATALOG: list[dict[str, Any]] = [
     {
@@ -173,8 +174,8 @@ async def test_single_session_reused_across_multiple_calls() -> None:
     session = _make_session(get_response=resp_ctx)
 
     with patch("aiohttp.ClientSession", return_value=session) as mock_cls:
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
     # Constructor must have been called exactly once despite two calls.
     mock_cls.assert_called_once()
@@ -215,7 +216,7 @@ async def test_close_then_call_recreates_session() -> None:
 
     with patch("aiohttp.ClientSession") as mock_cls:
         mock_cls.return_value = _make_session(get_response=resp_ctx)
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
     # Now close.
     old_session = client._session
@@ -228,7 +229,9 @@ async def test_close_then_call_recreates_session() -> None:
     resp_ctx2 = _make_response(200, _SAMPLE_PREFS)
     new_session = _make_session(get_response=resp_ctx2)
     with patch("aiohttp.ClientSession", return_value=new_session):
-        result = await client.get_my_preferences(discord_id=_DISCORD_ID)
+        result = await client.get_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+        )
 
     assert result == _SAMPLE_PREFS
     assert client._session is new_session
@@ -242,7 +245,9 @@ async def test_async_context_manager_closes_session_on_exit() -> None:
 
     with patch("aiohttp.ClientSession", return_value=session):
         async with SiegeWebClient(base_url=_BASE_URL, token=_TOKEN) as client:
-            await client.get_my_preferences(discord_id=_DISCORD_ID)
+            await client.get_my_preferences(
+                discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+            )
 
     # After exiting the context, close() should have been invoked.
     session.close.assert_called_once()
@@ -343,7 +348,9 @@ async def test_get_my_preferences_happy_path() -> None:
     session = _make_session(get_response=resp_ctx)
     _inject_session(client, session)
 
-    result = await client.get_my_preferences(discord_id=_DISCORD_ID)
+    result = await client.get_my_preferences(
+        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+    )
 
     assert result == _SAMPLE_PREFS
 
@@ -356,12 +363,33 @@ async def test_get_my_preferences_sends_auth_headers() -> None:
     session = _make_session(get_response=resp_ctx)
     _inject_session(client, session)
 
-    await client.get_my_preferences(discord_id=_DISCORD_ID)
+    await client.get_my_preferences(
+        discord_id=_DISCORD_ID,
+        discord_username=_DISCORD_USERNAME,
+    )
 
     call_kwargs = session.get.call_args[1] if session.get.call_args else {}
     headers = call_kwargs.get("headers", {})
     assert headers.get("Authorization") == f"Bearer {_TOKEN}"
     assert headers.get("X-Acting-Discord-Id") == _DISCORD_ID
+
+
+@pytest.mark.asyncio
+async def test_get_my_preferences_sends_discord_username_header() -> None:
+    """get_my_preferences sends X-Acting-Discord-Username with the username value."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_PREFS)
+    session = _make_session(get_response=resp_ctx)
+    _inject_session(client, session)
+
+    await client.get_my_preferences(
+        discord_id=_DISCORD_ID,
+        discord_username=_DISCORD_USERNAME,
+    )
+
+    call_kwargs = session.get.call_args[1] if session.get.call_args else {}
+    headers = call_kwargs.get("headers", {})
+    assert headers.get("X-Acting-Discord-Username") == _DISCORD_USERNAME
 
 
 @pytest.mark.asyncio
@@ -373,7 +401,7 @@ async def test_get_my_preferences_401_raises_auth_error() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebAuthError):
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
 
 @pytest.mark.asyncio
@@ -385,7 +413,7 @@ async def test_get_my_preferences_404_raises_not_found_error() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebNotFoundError):
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
 
 @pytest.mark.asyncio
@@ -397,7 +425,7 @@ async def test_get_my_preferences_422_raises_validation_error() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebValidationError):
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
 
 @pytest.mark.asyncio
@@ -413,7 +441,9 @@ async def test_get_my_preferences_429_retries_once_and_succeeds() -> None:
     _inject_session(client, session)
 
     with patch("asyncio.sleep", new_callable=AsyncMock):
-        result = await client.get_my_preferences(discord_id=_DISCORD_ID)
+        result = await client.get_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+        )
 
     assert result == _SAMPLE_PREFS
     assert session.get.call_count == 2
@@ -430,7 +460,9 @@ async def test_get_my_preferences_429_persistent_raises_rate_limit_error() -> No
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         with pytest.raises(SiegeWebRateLimitError):
-            await client.get_my_preferences(discord_id=_DISCORD_ID)
+            await client.get_my_preferences(
+                discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+            )
 
     assert mock_sleep.await_count == 3
 
@@ -448,7 +480,9 @@ async def test_set_my_preferences_happy_path() -> None:
     session = _make_session(put_response=resp_ctx)
     _inject_session(client, session)
 
-    result = await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+    result = await client.set_my_preferences(
+        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5]
+    )
 
     assert result == _SAMPLE_PREFS
 
@@ -461,7 +495,9 @@ async def test_set_my_preferences_sends_correct_body() -> None:
     session = _make_session(put_response=resp_ctx)
     _inject_session(client, session)
 
-    await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5, 12])
+    await client.set_my_preferences(
+        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5, 12]
+    )
 
     call_kwargs = session.put.call_args[1] if session.put.call_args else {}
     body = call_kwargs.get("json", {})
@@ -476,12 +512,35 @@ async def test_set_my_preferences_sends_auth_headers() -> None:
     session = _make_session(put_response=resp_ctx)
     _inject_session(client, session)
 
-    await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+    await client.set_my_preferences(
+        discord_id=_DISCORD_ID,
+        discord_username=_DISCORD_USERNAME,
+        ids=[5],
+    )
 
     call_kwargs = session.put.call_args[1] if session.put.call_args else {}
     headers = call_kwargs.get("headers", {})
     assert headers.get("Authorization") == f"Bearer {_TOKEN}"
     assert headers.get("X-Acting-Discord-Id") == _DISCORD_ID
+
+
+@pytest.mark.asyncio
+async def test_set_my_preferences_sends_discord_username_header() -> None:
+    """set_my_preferences sends X-Acting-Discord-Username with the username value."""
+    client = SiegeWebClient(base_url=_BASE_URL, token=_TOKEN)
+    resp_ctx = _make_response(200, _SAMPLE_PREFS)
+    session = _make_session(put_response=resp_ctx)
+    _inject_session(client, session)
+
+    await client.set_my_preferences(
+        discord_id=_DISCORD_ID,
+        discord_username=_DISCORD_USERNAME,
+        ids=[5],
+    )
+
+    call_kwargs = session.put.call_args[1] if session.put.call_args else {}
+    headers = call_kwargs.get("headers", {})
+    assert headers.get("X-Acting-Discord-Username") == _DISCORD_USERNAME
 
 
 @pytest.mark.asyncio
@@ -492,7 +551,9 @@ async def test_set_my_preferences_empty_ids_clears_preferences() -> None:
     session = _make_session(put_response=resp_ctx)
     _inject_session(client, session)
 
-    result = await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[])
+    result = await client.set_my_preferences(
+        discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[]
+    )
 
     assert result == []
     call_kwargs = session.put.call_args[1] if session.put.call_args else {}
@@ -508,7 +569,9 @@ async def test_set_my_preferences_401_raises_auth_error() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebAuthError):
-        await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+        await client.set_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5]
+        )
 
 
 @pytest.mark.asyncio
@@ -520,7 +583,9 @@ async def test_set_my_preferences_404_raises_not_found_error() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebNotFoundError):
-        await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+        await client.set_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5]
+        )
 
 
 @pytest.mark.asyncio
@@ -532,7 +597,9 @@ async def test_set_my_preferences_422_raises_validation_error() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebValidationError):
-        await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+        await client.set_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5]
+        )
 
 
 @pytest.mark.asyncio
@@ -548,7 +615,9 @@ async def test_set_my_preferences_429_retries_once_and_succeeds() -> None:
     _inject_session(client, session)
 
     with patch("asyncio.sleep", new_callable=AsyncMock):
-        result = await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+        result = await client.set_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5]
+        )
 
     assert result == _SAMPLE_PREFS
     assert session.put.call_count == 2
@@ -565,7 +634,9 @@ async def test_set_my_preferences_429_persistent_raises_rate_limit_error() -> No
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         with pytest.raises(SiegeWebRateLimitError):
-            await client.set_my_preferences(discord_id=_DISCORD_ID, ids=[5])
+            await client.set_my_preferences(
+                discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME, ids=[5]
+            )
 
     assert mock_sleep.await_count == 3
 
@@ -775,7 +846,7 @@ async def test_call_with_retry_honors_retry_after_header() -> None:
     _inject_session(client, session)
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
     mock_sleep.assert_awaited_once_with(2.0)
 
@@ -797,7 +868,7 @@ async def test_call_with_retry_caps_retry_after() -> None:
     _inject_session(client, session)
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
     mock_sleep.assert_awaited_once_with(1.0)
 
@@ -813,7 +884,9 @@ async def test_call_with_retry_uses_exponential_when_header_absent() -> None:
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         with pytest.raises(SiegeWebRateLimitError):
-            await client.get_my_preferences(discord_id=_DISCORD_ID)
+            await client.get_my_preferences(
+                discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+            )
 
     sleep_args = [call.args[0] for call in mock_sleep.await_args_list]
     assert sleep_args == [1.0, 2.0, 4.0]
@@ -835,7 +908,9 @@ async def test_call_with_retry_succeeds_on_third_attempt() -> None:
     _inject_session(client, session)
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        result = await client.get_my_preferences(discord_id=_DISCORD_ID)
+        result = await client.get_my_preferences(
+            discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+        )
 
     assert result == _SAMPLE_PREFS
     assert session.get.call_count == 3
@@ -881,7 +956,7 @@ async def test_auth_error_message_does_not_contain_token() -> None:
     _inject_session(client, session)
 
     with pytest.raises(SiegeWebAuthError) as exc_info:
-        await client.get_my_preferences(discord_id=_DISCORD_ID)
+        await client.get_my_preferences(discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME)
 
     assert _TOKEN not in str(exc_info.value), "Exception message must not contain the bot token"
 
@@ -898,7 +973,9 @@ async def test_token_not_logged_on_auth_error(
 
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(SiegeWebAuthError):
-            await client.get_my_preferences(discord_id=_DISCORD_ID)
+            await client.get_my_preferences(
+                discord_id=_DISCORD_ID, discord_username=_DISCORD_USERNAME
+            )
 
     for record in caplog.records:
         assert (

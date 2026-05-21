@@ -255,6 +255,7 @@ class PostConditionsGridView(discord.ui.View):
         catalog: list[dict[str, Any]],
         preferences: list[int],
         discord_id: str,
+        discord_username: str,
         siege_client: Any,
         timeout: float | None = 300.0,
     ) -> None:
@@ -267,6 +268,9 @@ class PostConditionsGridView(discord.ui.View):
                 to seed :attr:`_selections`.
             discord_id: The invoking user's Discord snowflake as a string.
                 Forwarded to the siege client on Save.
+            discord_username: The invoking user's canonical Discord username
+                (``interaction.user.name``).  Forwarded to the siege client
+                as ``X-Acting-Discord-Username`` on Save.
             siege_client: A
                 :class:`~mom_bot.post_conditions.client.SiegeWebClient`
                 used by :class:`SaveButton` on commit.
@@ -275,6 +279,7 @@ class PostConditionsGridView(discord.ui.View):
         super().__init__(timeout=timeout)
         self._catalog = catalog
         self._discord_id = discord_id
+        self._discord_username = discord_username
         self._siege_client = siege_client
         self._pages: list[GridPage] = split_by_meta_group(catalog)
         self._page_index: int = 0
@@ -512,7 +517,11 @@ class SaveButton(discord.ui.Button["PostConditionsGridView"]):
         assert view is not None
         ids = [cid for cid, on in view._selections.items() if on]
         try:
-            await view._siege_client.set_my_preferences(discord_id=view._discord_id, ids=ids)
+            await view._siege_client.set_my_preferences(
+                discord_id=view._discord_id,
+                discord_username=view._discord_username,
+                ids=ids,
+            )
         except SiegeWebError:
             _logger.exception(
                 "set_my_preferences failed for discord_id=%s",
