@@ -16,8 +16,9 @@
 // Networking: Public access + specific firewall rules. AllowAllAzureServices
 //   (0.0.0.0) is NOT used — it admits all Azure tenant IPs (spike #101 §
 //   Bonus Finding 4 / docs/spike/2026-05-17-postgres-aad-findings.md).
-//   CAE static egress IP is pinned here (Task 1.4 folded into Phase 1 module)
-//   so the rule is in place before any connection attempt at Phase 4 cutover.
+//   Container App outbound IPs are resolved at deploy time from
+//   containerApp.outputs.outboundIpAddresses — one firewall rule per IP,
+//   so all egress IPs are covered even if Azure assigns more than one (issue #120).
 //   Operator ad-hoc access is NOT managed by Bicep — see infra/aad-runbook.md
 //   "Dev-laptop ad-hoc Postgres access" for the runbook (issue #166).
 
@@ -41,8 +42,9 @@ param managedIdentityPrincipalId string
 @description('Display name of the UAMI (used as the Entra admin login name).')
 param managedIdentityName string
 
-@description('Static egress IP of the Container Apps Environment (cae-mom-bot-eastus2). Used to allow the bot to connect to Postgres. Retrieve with: az containerapp env show -n cae-mom-bot-eastus2 -g mom-bot --query properties.staticIp -o tsv')
-param caeEgressIp string
+@description('Outbound IP addresses of the Container App (ca-mom-bot). One firewall rule is created per IP so all egress IPs are covered even if Azure assigns more than one.')
+@minLength(1)
+param containerAppOutboundIps array
 
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: serverName
@@ -84,16 +86,21 @@ resource db 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = {
   }
 }
 
-// Firewall: CAE static egress — pinned here (Task 1.4 folded into Phase 1 module)
-// so the rule is in place before any connection attempt at Phase 4 cutover.
-resource fwCae 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
-  parent: pg
-  name: 'allow-cae-egress'
-  properties: {
-    startIpAddress: caeEgressIp
-    endIpAddress: caeEgressIp
+// Firewall: one rule per Container App outbound IP (issue #120 Part 2).
+// Resolved at deploy time from containerApp.outputs.outboundIpAddresses so
+// the rules stay correct if Azure assigns additional egress IPs in future.
+// @batchSize(1) serializes rule creation to avoid ARM throttling when many IPs exist.
+@batchSize(1)
+resource fwCaOutbound 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = [
+  for (ip, index) in containerAppOutboundIps: {
+    parent: pg
+    name: 'allow-ca-egress-${index}'
+    properties: {
+      startIpAddress: ip
+      endIpAddress: ip
+    }
   }
-}
+]
 
 // Entra admins (mi-mom-bot + mom-bot-gha) are NOT declared here. They are
 // created post-deploy by infra/scripts/create-entra-admins.sh because the
