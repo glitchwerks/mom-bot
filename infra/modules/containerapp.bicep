@@ -19,9 +19,10 @@
 // - Consumption profile only (no workload profiles) — cheapest tier; mom-bot's
 //   workload is single-replica, tiny CPU/memory. WorkloadProfiles adds cost and
 //   complexity that buys nothing here.
-// - Ingress disabled — the Discord bot is outbound-only for v1.0. The sidecar
-//   /api/internal/role-sync endpoint (Epic 2.6) will re-enable ingress when it
-//   lands; keeping it off now is smallest blast radius.
+// - External public HTTPS ingress enabled (issue #76 A4, Epic #128 Phase 1). Target
+//   port 8001 is the sidecar FastAPI port. IP allowlist restricts inbound to
+//   siege-web prod CAE static egress (20.245.166.6/32, decision D-2). Bearer-token
+//   auth on /api/internal/role-sync is the second layer of defence.
 // - User-assigned MI only (mi-mom-bot) — attached as the sole identity so
 //   ManagedIdentityCredential unambiguously selects it for Key Vault access.
 //   SystemAssigned was previously also attached but caused the SDK to default
@@ -146,9 +147,31 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     environmentId: cae.id
     configuration: {
-      // Ingress disabled — Discord bot is outbound-only for v1.0.
-      // Epic 2.6 (role-sync sidecar) will re-enable ingress.
+      // External public HTTPS ingress — enabled for sidecar API (Epic #128 Phase 1, issue #76 A4).
+      // Container Apps auto-provisions TLS when external=true; transport: 'http' is correct here
+      // (the platform does TLS termination at the edge — specifying 'https' is wrong for this field).
+      // IP allowlist restricts inbound to siege-web prod CAE static egress only (D-2).
       // Policy 1 reinforcement (issue #87): no rolling overlap — old replica drains before new one starts.
+      ingress: {
+        external: true
+        targetPort: 8001
+        transport: 'http'
+        allowInsecure: false
+        ipSecurityRestrictions: [
+          {
+            name: 'siege-web-prod-cae-egress'
+            ipAddressRange: '20.245.166.6/32'
+            action: 'Allow'
+            description: 'siege-web prod Container Apps Environment static outbound IP (Epic #128 D-2)'
+          }
+        ]
+        traffic: [
+          {
+            latestRevision: true
+            weight: 100
+          }
+        ]
+      }
       activeRevisionsMode: 'Single'
       secrets: [
         {
