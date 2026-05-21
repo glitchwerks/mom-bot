@@ -37,6 +37,7 @@ import os
 import time
 
 import discord
+import uvicorn
 from aiohttp import web
 from discord import app_commands
 
@@ -49,6 +50,7 @@ from mom_bot.post_conditions.commands import register as _register_post_conditio
 from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
 from mom_bot.roles.seed import seed_day_role_map
+from mom_bot.sidecar import build_app
 
 _logger = logging.getLogger(__name__)
 
@@ -115,6 +117,13 @@ class MomBot(discord.Client):
         _siege_client: The :class:`~mom_bot.post_conditions.client.\
 SiegeWebClient` instance registered via :func:`make_client`; stored so
             :meth:`close` can close its aiohttp session on shutdown.
+        _sidecar_task: The asyncio task running the in-process uvicorn
+            sidecar server; stored to prevent garbage collection and to
+            allow :meth:`close` to drain it on shutdown.  Set to ``None``
+            until :meth:`on_ready` fires and the guild object is valid.
+        _sidecar_server: The :class:`uvicorn.Server` instance serving the
+            FastAPI sidecar; stored so :meth:`close` can signal it to stop
+            by setting ``should_exit = True`` before awaiting the task.
     """
 
     def __init__(self, intents: discord.Intents) -> None:
@@ -130,6 +139,8 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         self._reminder_task: asyncio.Task[None] | None = None
         self._health_runner: web.AppRunner | None = None
         self._siege_client: SiegeWebClient | None = None
+        self._sidecar_task: asyncio.Task[None] | None = None
+        self._sidecar_server: uvicorn.Server | None = None
 
     async def setup_hook(self) -> None:
         """Sync slash commands and spawn the post-READY init task.
@@ -238,7 +249,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
             raise
 
     async def on_ready(self) -> None:
-        """Log connection details and seed day-role map on gateway READY.
+        """Log connection details, seed day-role map, and start sidecar server.
 
         Emits a structured INFO record with the bot user, guild count, member
         count, and raw intent bitfield value so operators can verify the
@@ -250,6 +261,18 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         Discord API blip) does not bring down the bot — Discord can call
         ``on_ready`` multiple times across reconnects, and missing one seed
         cycle is preferable to crashing.
+
+        Finally, starts the in-process FastAPI sidecar via
+        :func:`~mom_bot.sidecar.build_app` and uvicorn on port ``8001``.
+        The sidecar is started here (not in :meth:`setup_hook`) because
+        :func:`~mom_bot.sidecar.build_app` requires a fully connected
+        :class:`discord.Guild` object — only available after READY.  The
+        uvicorn server runs as an asyncio task on the same event loop as
+        the Discord gateway.
+
+        Sidecar startup is idempotent: if this method is called again after
+        a reconnect and the sidecar task is already running, it is left
+        untouched.
         """
         member_count = sum(g.member_count or 0 for g in self.guilds)
         _logger.info(
@@ -271,14 +294,101 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
                 "role map — will retry on next on_ready"
             )
 
+        # Start the FastAPI sidecar on port 8001.  Idempotent: if the task
+        # is already running (reconnect scenario), leave it untouched.
+        if self._sidecar_task is None or self._sidecar_task.done():
+            self._start_sidecar()
+
+    def _start_sidecar(self) -> None:
+        """Build the FastAPI sidecar and start it under uvicorn on port 8001.
+
+        Called from :meth:`on_ready` once the guild object is valid.  The
+        uvicorn server runs as an asyncio task on the same event loop as the
+        Discord gateway so both halves share a single event loop.
+
+        The task is stored on ``self._sidecar_task`` to prevent garbage
+        collection and to allow :meth:`close` to drain it on shutdown.  The
+        server instance is stored on ``self._sidecar_server`` so
+        :meth:`close` can set ``should_exit = True`` to initiate a graceful
+        shutdown.
+
+        Secret loading
+        --------------
+        ``api_key`` is fetched from ``load_secret("discord-bot-api-key")``,
+        which applies the ``{env}-`` prefix automatically (same pattern as all
+        other operational secrets; no new Container Apps env var required).
+
+        Guild object
+        ------------
+        ``client.get_guild(int(guild_id))`` returns the live
+        :class:`discord.Guild` (which has member lists, roles, etc.) rather
+        than the ``discord.Object`` stored on ``self.guild`` (which is only
+        a snowflake wrapper used for slash-command sync).
+        """
+        api_key = load_secret("discord-bot-api-key")
+        guild_id = int(load_secret("guild-id"))
+        guild = self.get_guild(guild_id)
+        if guild is None:
+            _logger.error(
+                "Sidecar startup skipped: get_guild(%s) returned None; "
+                "bot may not be a member of guild %s",
+                guild_id,
+                guild_id,
+            )
+            return
+
+        session_factory = _build_session_factory(_resolve_db_url())
+        app = build_app(
+            api_key=api_key,
+            guild=guild,
+            session_factory=session_factory,
+        )
+
+        config = uvicorn.Config(app, host="0.0.0.0", port=8001, log_level="info")
+        server = uvicorn.Server(config)
+        self._sidecar_server = server
+
+        self._sidecar_task = asyncio.create_task(
+            server.serve(),
+            name="sidecar-server",
+        )
+        self._sidecar_task.add_done_callback(_log_task_exception)
+        _logger.info("Sidecar server starting on 0.0.0.0:8001")
+
     async def close(self) -> None:
         """Shut down ancillary resources then close the gateway connection.
 
         Overrides :meth:`discord.Client.close` to ensure the aiohttp health
-        server runner and the siege-web HTTP client session are cleaned up
-        before the process exits.  All cleanup is best-effort: failures are
-        logged but not re-raised so the gateway close still proceeds.
+        server runner, the in-process uvicorn sidecar, and the siege-web HTTP
+        client session are cleaned up before the process exits.  All cleanup
+        is best-effort: failures are logged but not re-raised so the gateway
+        close still proceeds.
+
+        Sidecar shutdown sequence
+        -------------------------
+        1. Set ``self._sidecar_server.should_exit = True`` — signals uvicorn
+           to stop accepting new connections and begin draining.
+        2. Await ``self._sidecar_task`` — waits until uvicorn has drained
+           in-flight requests and fully stopped.
+
+        Container Apps sends SIGTERM with a configurable grace period (default
+        30 s) before forcibly terminating the container; the sequence above
+        ensures the sidecar has a chance to flush in-flight requests before
+        the process exits.
         """
+        # Drain the sidecar server before closing the gateway.
+        if self._sidecar_server is not None:
+            self._sidecar_server.should_exit = True
+        if self._sidecar_task is not None and not self._sidecar_task.done():
+            try:
+                await self._sidecar_task
+                _logger.info("Sidecar server drained and stopped")
+            except Exception:
+                _logger.warning(
+                    "Sidecar server shutdown encountered an error",
+                    exc_info=True,
+                )
+
         if self._health_runner is not None:
             try:
                 await self._health_runner.cleanup()
