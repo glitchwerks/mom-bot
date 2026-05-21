@@ -258,9 +258,17 @@ az role assignment create \
 
 ```powershell
 az role assignment list `
-  --assignee "6fcf4d62-e6da-4819-9667-234a55018fa2" `
+  --assignee $gha `
   --all `
   --query "[?roleDefinitionName=='Role Based Access Control Administrator'].{role:roleDefinitionName, scope:scope, condition:condition, conditionVersion:conditionVersion}" `
+  -o json
+```
+
+```bash
+az role assignment list \
+  --assignee "$GHA" \
+  --all \
+  --query "[?roleDefinitionName=='Role Based Access Control Administrator'].{role:roleDefinitionName, scope:scope, condition:condition, conditionVersion:conditionVersion}" \
   -o json
 ```
 
