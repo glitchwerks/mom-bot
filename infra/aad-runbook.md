@@ -186,6 +186,110 @@ See plan `docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md
 
 ---
 
+## Step 4.6 — Grant SP constrained RBAC Admin at RG scope (issue #167)
+
+`infra-deploy.yml` runs `az deployment sub create`, which causes Bicep to write Key Vault (KV) role assignments via the ARM `Microsoft.Authorization/roleAssignments` resource. For that write to succeed, the SP needs `Microsoft.Authorization/roleAssignments/write` at a scope that covers the KV. This step grants the role at RG scope (not KV scope directly) — see design rationale below. Rather than granting the SP a broad User Access Administrator role (which allows assigning any role), this step grants `Role Based Access Control Administrator` constrained by an ABAC condition that limits the SP to assigning only **Key Vault Secrets User** and **Key Vault Secrets Officer**.
+
+**What this grants:**
+- Role: `Role Based Access Control Administrator` (built-in `f58310d9-a9f6-439a-9e8d-f62e7b41a168`)
+- Scope: `/subscriptions/<sub-id>/resourceGroups/mom-bot`
+- Assignable roles (via ABAC condition):
+  - `Key Vault Secrets User` (`4633458b-17de-41a5-8b4b-ea0e69bca6cb`)
+  - `Key Vault Secrets Officer` (`b86a8fe4-44ce-4948-aee5-eccb2c155cd7`)
+
+The condition covers both `roleAssignments/write` (create) and `roleAssignments/delete` (remove) actions, with the appropriate attribute source for each (`@Request` for write, `@Resource` for delete), per the [Azure ABAC delegation examples](https://learn.microsoft.com/en-us/azure/role-based-access-control/delegate-role-assignments-examples) (fetched 2026-05-21).
+
+**Full condition expression (verbatim):**
+
+```
+((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))
+```
+
+**Condition syntax reference:** [Azure ABAC condition format and syntax](https://learn.microsoft.com/en-us/azure/role-based-access-control/conditions-format) (fetched 2026-05-21) — `ForAnyOfAnyValues:GuidEquals` is the correct operator for GUID set-membership on `RoleDefinitionId`.
+
+### Procedure (replay in a new tenant/subscription)
+
+The `az role assignment create --condition` flag has a bug on some CLI versions where `--scope` with a full resource path triggers `MissingSubscription`. Use `az rest` directly as a workaround:
+
+```powershell
+$SUB = az account show --query id -o tsv
+$gha = az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
+$CONDITION = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
+
+# Generate a random assignment GUID
+$ASSIGNMENT_ID = [guid]::NewGuid().ToString()
+
+$body = @{
+  properties = @{
+    roleDefinitionId = "/subscriptions/$SUB/providers/Microsoft.Authorization/roleDefinitions/f58310d9-a9f6-439a-9e8d-f62e7b41a168"
+    principalId      = $gha
+    principalType    = "ServicePrincipal"
+    description      = "GHA SP role-assignment authority constrained to KV Secrets User/Officer for infra-deploy.yml"
+    condition        = $CONDITION
+    conditionVersion = "2.0"
+  }
+} | ConvertTo-Json -Depth 5
+
+az rest `
+  --method PUT `
+  --uri "https://management.azure.com/subscriptions/$SUB/resourceGroups/mom-bot/providers/Microsoft.Authorization/roleAssignments/${ASSIGNMENT_ID}?api-version=2022-04-01" `
+  --body $body `
+  -o json
+```
+
+If `az role assignment create` works in your environment (future CLI versions may fix the `--scope` bug), the equivalent command is:
+
+```bash
+SUB=$(az account show --query id -o tsv)
+GHA=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
+CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
+
+az role assignment create \
+  --role "Role Based Access Control Administrator" \
+  --assignee-object-id "$GHA" \
+  --assignee-principal-type ServicePrincipal \
+  --scope "/subscriptions/${SUB}/resourceGroups/mom-bot" \
+  --condition "${CONDITION}" \
+  --condition-version "2.0" \
+  --description "GHA SP role-assignment authority constrained to KV Secrets User/Officer for infra-deploy.yml"
+```
+
+### Verify
+
+```powershell
+az role assignment list `
+  --assignee $gha `
+  --all `
+  --query "[?roleDefinitionName=='Role Based Access Control Administrator'].{role:roleDefinitionName, scope:scope, condition:condition, conditionVersion:conditionVersion}" `
+  -o json
+```
+
+```bash
+az role assignment list \
+  --assignee "$GHA" \
+  --all \
+  --query "[?roleDefinitionName=='Role Based Access Control Administrator'].{role:roleDefinitionName, scope:scope, condition:condition, conditionVersion:conditionVersion}" \
+  -o json
+```
+
+Expected output confirms: role is `Role Based Access Control Administrator`, scope ends in `.../resourceGroups/mom-bot`, and the condition string contains both KV role GUIDs.
+
+### Expected full role listing after this step
+
+| Role | Scope |
+|---|---|
+| Mom-bot GHA Subscription Deployer | `/subscriptions/<sub-id>` |
+| Contributor | `.../resourceGroups/mom-bot` |
+| Container Apps Contributor | `.../resourceGroups/mom-bot` |
+| Role Based Access Control Administrator | `.../resourceGroups/mom-bot` |
+| Key Vault Secrets Officer | `.../resourceGroups/mom-bot/.../kv-mombot-eastus2` |
+
+> **Note on Contributor + Container Apps Contributor:** Both are confirmed present in the live subscription (verified 2026-05-21). Container Apps Contributor was granted first by Bicep (`infra/modules/containerapp.bicep`) before the broader Contributor role was added as a fallback expedient (see Step 4.5 fallback note). Contributor is a superset of Container Apps Contributor; the narrower role is left in place to avoid disrupting the Bicep-managed assignment — schedule cleanup in a follow-up issue.
+
+**Design rationale:** Granting at RG scope (not KV scope) gives the SP the minimum scope necessary for the Bicep KV role-assignment resource while avoiding subscription-wide RBAC authority. The ABAC condition is the safety layer — without it, RBAC Admin would allow the SP to assign any role to any principal within the RG. See [#167](https://github.com/glitchwerks/mom-bot/issues/167) for the full decision thread.
+
+---
+
 ## Step 5 — Deploy Bicep infrastructure
 
 The `$env:GHA_SP_OBJECT_ID` env var (exported in Step 4) is read by
@@ -612,6 +716,7 @@ az deployment sub create `
 - [ ] Step 3b — Federated credential for pull requests created
 - [ ] Step 4 — `$env:GHA_SP_OBJECT_ID` exported in session
 - [ ] Step 4.5 (one-time) — Custom role `Mom-bot GHA Subscription Deployer` created and assigned to `mom-bot-gha` at subscription scope
+- [ ] Step 4.6 (one-time) — `Role Based Access Control Administrator` granted to `mom-bot-gha` at RG scope with ABAC condition constraining assignable roles to KV Secrets User/Officer (see #167)
 - [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)
 - [ ] Step 5.5 — Entra admins created on Postgres via `infra/scripts/create-entra-admins.sh`
 - [ ] Step 6 — Repo variables set in GitHub
