@@ -5,9 +5,10 @@ you have completed the pre-flight checklist (`docs/operations/discord-roles-pref
 the initial smoke (`docs/operations/day-role-sync-smoke.md`). This runbook covers steady-state
 monitoring, incident playbooks, and operator remediation steps.
 
-**Source of truth for the wire contract:** `glitchwerks/rsl-siege-manager` —
-`docs/webhooks/day-role-sync.md`. Any payload/response shape detail not covered here defers to
-that document.
+**Source of truth for the wire contract:** [`glitchwerks/rsl-mom-apps` —
+`contracts/day-role-sync.md`](https://github.com/glitchwerks/rsl-mom-apps/blob/main/contracts/day-role-sync.md)
+(pinned: [`@5576807`](https://github.com/glitchwerks/rsl-mom-apps/blob/5576807101c04a9b595192cee2b9a02aed1c9c12/contracts/day-role-sync.md)).
+Any payload/response shape detail not covered here defers to that document.
 
 ---
 
@@ -466,7 +467,7 @@ member's assignment simultaneously. No mom-bot action is required.
 
 - Pre-flight checklist: `docs/operations/discord-roles-preflight.md`
 - Smoke checklist: `docs/operations/day-role-sync-smoke.md`
-- Wire contract: `glitchwerks/rsl-siege-manager` — `docs/webhooks/day-role-sync.md`
+- Wire contract: [`glitchwerks/rsl-mom-apps` — `contracts/day-role-sync.md`](https://github.com/glitchwerks/rsl-mom-apps/blob/main/contracts/day-role-sync.md) (pinned: [`@5576807`](https://github.com/glitchwerks/rsl-mom-apps/blob/5576807101c04a9b595192cee2b9a02aed1c9c12/contracts/day-role-sync.md))
 - Parent epic: `glitchwerks/mom-bot#6`
 - A2 seed implementation: PR #68 (`src/mom_bot/roles/seed.py`)
 - B1 role service + preflight: `src/mom_bot/roles/service.py`

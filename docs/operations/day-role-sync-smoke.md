@@ -268,4 +268,4 @@ Cross-references:
 - Runbook: `docs/operations/day-role-sync-runbook.md`
 - Pre-flight checklist: `docs/operations/discord-roles-preflight.md`
 - Parent epic: `glitchwerks/mom-bot#6`
-- Wire contract: `glitchwerks/rsl-siege-manager` — `docs/webhooks/day-role-sync.md`
+- Wire contract: [`glitchwerks/rsl-mom-apps` — `contracts/day-role-sync.md`](https://github.com/glitchwerks/rsl-mom-apps/blob/main/contracts/day-role-sync.md) (pinned: [`@5576807`](https://github.com/glitchwerks/rsl-mom-apps/blob/5576807101c04a9b595192cee2b9a02aed1c9c12/contracts/day-role-sync.md))
