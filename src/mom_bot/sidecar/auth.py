@@ -89,9 +89,7 @@ def make_bearer_dependency(api_key: str) -> Callable[..., None]:
                 detail="Missing Authorization header",
             )
         scheme, _, token = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not secrets.compare_digest(
-            token, api_key
-        ):
+        if scheme.lower() != "bearer" or not secrets.compare_digest(token, api_key):
             raise HTTPException(
                 status_code=401,
                 detail="Invalid API key",

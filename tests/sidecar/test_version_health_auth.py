@@ -166,9 +166,9 @@ class TestGetVersion:
         client = _make_client()
         response = client.get("/api/version")
         version = response.json()["version"]
-        assert isinstance(version, str) and len(version) > 0, (
-            f"Expected non-empty string for 'version', got: {version!r}"
-        )
+        assert (
+            isinstance(version, str) and len(version) > 0
+        ), f"Expected non-empty string for 'version', got: {version!r}"
 
     def test_version_bare_semver_when_env_vars_absent(self) -> None:
         """Version string is bare semver when BUILD_NUMBER / GIT_SHA not set.
@@ -178,17 +178,13 @@ class TestGetVersion:
         build suffix.
         """
         client = _make_client()
-        env_clean = {
-            k: v
-            for k, v in os.environ.items()
-            if k not in ("BUILD_NUMBER", "GIT_SHA")
-        }
+        env_clean = {k: v for k, v in os.environ.items() if k not in ("BUILD_NUMBER", "GIT_SHA")}
         with patch.dict(os.environ, env_clean, clear=True):
             response = client.get("/api/version")
         version = response.json()["version"]
-        assert "+" not in version, (
-            f"Expected bare semver (no '+') when env vars absent; got: {version!r}"
-        )
+        assert (
+            "+" not in version
+        ), f"Expected bare semver (no '+') when env vars absent; got: {version!r}"
 
     def test_version_includes_build_suffix_when_env_vars_set(self) -> None:
         """Version string includes '+<BUILD_NUMBER>.<GIT_SHA[:7]>' when both set.
@@ -202,8 +198,7 @@ class TestGetVersion:
             response = client.get("/api/version")
         version = response.json()["version"]
         assert "+99.abcdef1" in version, (
-            f"Expected '+99.abcdef1' suffix in version when env vars set; "
-            f"got: {version!r}"
+            f"Expected '+99.abcdef1' suffix in version when env vars set; " f"got: {version!r}"
         )
 
     def test_version_no_auth_required(self) -> None:
@@ -232,27 +227,21 @@ class TestGetHealth:
         client = _make_client()
         response = client.get("/api/health")
         body = response.json()
-        assert body.get("status") == "healthy", (
-            f"Expected status='healthy' in body; got: {body!r}"
-        )
+        assert body.get("status") == "healthy", f"Expected status='healthy' in body; got: {body!r}"
 
     def test_health_bot_connected_true_when_ready(self) -> None:
         """bot_connected is true when the fake bot's is_ready() returns True."""
         client = _make_client(ready=True)
         response = client.get("/api/health")
         body = response.json()
-        assert body.get("bot_connected") is True, (
-            f"Expected bot_connected=true; got: {body!r}"
-        )
+        assert body.get("bot_connected") is True, f"Expected bot_connected=true; got: {body!r}"
 
     def test_health_bot_connected_false_when_not_ready(self) -> None:
         """bot_connected is false when the fake bot's is_ready() returns False."""
         client = _make_client(ready=False)
         response = client.get("/api/health")
         body = response.json()
-        assert body.get("bot_connected") is False, (
-            f"Expected bot_connected=false; got: {body!r}"
-        )
+        assert body.get("bot_connected") is False, f"Expected bot_connected=false; got: {body!r}"
 
     def test_health_no_auth_required(self) -> None:
         """GET /api/health must succeed with no Authorization header."""
@@ -281,9 +270,7 @@ class TestGetHealth:
 
         # First call — bot is ready.
         r1 = client.get("/api/health")
-        assert r1.json()["bot_connected"] is True, (
-            "First call: expected bot_connected=true"
-        )
+        assert r1.json()["bot_connected"] is True, "First call: expected bot_connected=true"
 
         # Flip the flag without rebuilding the app.
         fake_bot._ready = False
@@ -300,9 +287,7 @@ class TestGetHealth:
         client = _make_client()
         body = client.get("/api/health").json()
         assert "status" in body, f"Missing 'status' key in health body: {body!r}"
-        assert "bot_connected" in body, (
-            f"Missing 'bot_connected' key in health body: {body!r}"
-        )
+        assert "bot_connected" in body, f"Missing 'bot_connected' key in health body: {body!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -330,9 +315,10 @@ class TestBearerAuth:
                 "correlation_id": "test-corr-id",
             },
         )
-        assert response.status_code in (401, 403), (
-            f"Expected 401 or 403 for missing auth header; got {response.status_code}"
-        )
+        assert response.status_code in (
+            401,
+            403,
+        ), f"Expected 401 or 403 for missing auth header; got {response.status_code}"
 
     def test_missing_auth_header_returns_401(self) -> None:
         """Mom-bot sidecar returns 401 (not 403) when Authorization header
@@ -350,9 +336,9 @@ class TestBearerAuth:
                 "correlation_id": "test-corr-id",
             },
         )
-        assert response.status_code == 401, (
-            f"Expected 401 for missing auth header; got {response.status_code}"
-        )
+        assert (
+            response.status_code == 401
+        ), f"Expected 401 for missing auth header; got {response.status_code}"
 
     def test_missing_auth_header_body_has_detail(self) -> None:
         """Missing-header 401/403 response must have a 'detail' string key."""
@@ -369,9 +355,9 @@ class TestBearerAuth:
             },
         )
         body = response.json()
-        assert "detail" in body and isinstance(body["detail"], str), (
-            f"Expected 'detail' string in auth-failure body; got: {body!r}"
-        )
+        assert "detail" in body and isinstance(
+            body["detail"], str
+        ), f"Expected 'detail' string in auth-failure body; got: {body!r}"
 
     def test_wrong_token_returns_401(self) -> None:
         """A wrong Bearer token must return 401 Unauthorized."""
@@ -388,9 +374,9 @@ class TestBearerAuth:
             },
             headers={"Authorization": f"Bearer {_WRONG_KEY}"},
         )
-        assert response.status_code == 401, (
-            f"Expected 401 for wrong token; got {response.status_code}"
-        )
+        assert (
+            response.status_code == 401
+        ), f"Expected 401 for wrong token; got {response.status_code}"
 
     def test_wrong_token_response_has_www_authenticate_bearer(self) -> None:
         """Wrong-token 401 must include 'WWW-Authenticate: Bearer' header.
@@ -413,8 +399,7 @@ class TestBearerAuth:
         )
         www_auth = response.headers.get("www-authenticate", "")
         assert "Bearer" in www_auth, (
-            f"Expected 'WWW-Authenticate: Bearer' on 401; "
-            f"got www-authenticate={www_auth!r}"
+            f"Expected 'WWW-Authenticate: Bearer' on 401; " f"got www-authenticate={www_auth!r}"
         )
 
     def test_correct_token_reaches_endpoint(self) -> None:
@@ -439,9 +424,10 @@ class TestBearerAuth:
             headers={"Authorization": f"Bearer {_VALID_KEY}"},
         )
         # Auth must have passed — status must not be 401 or 403.
-        assert response.status_code not in (401, 403), (
-            f"Expected auth to pass with correct token; got {response.status_code}"
-        )
+        assert response.status_code not in (
+            401,
+            403,
+        ), f"Expected auth to pass with correct token; got {response.status_code}"
 
     def test_bearer_dependency_reusable_across_endpoints(self) -> None:
         """The same Bearer dependency protects different endpoints.
