@@ -23,7 +23,9 @@ Design
 ------
 Uses FastAPI TestClient (synchronous) with fake Discord objects.
 
-The key RED test is ``test_sidecar_body_validation_from_build_app_returns_422``:
+The key RED test is
+``TestSidecarValidationReturns422.
+test_sidecar_body_validation_from_build_app_returns_422``:
 it adds a canary POST endpoint to the app returned by ``build_app``, sends a
 request that triggers a body ValidationError through the app's actual
 exception handlers, and asserts the sidecar contract of 422.
@@ -42,9 +44,11 @@ from unittest.mock import MagicMock
 import discord
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from starlette.routing import Mount
 
 from mom_bot.db import Base
 from mom_bot.sidecar.app import build_app
@@ -81,7 +85,9 @@ class _FakeBot:
 class _FakeGuild:
     """Minimal discord.Guild stand-in."""
 
-    members: list[Any] = []
+    def __init__(self) -> None:
+        """Initialise with an empty members list per instance."""
+        self.members: list[Any] = []
 
     async def fetch_member(self, user_id: int) -> None:
         """Always raises NotFound — member lookup is not tested here."""
@@ -214,6 +220,75 @@ class TestSidecarValidationReturns422:
         assert isinstance(
             data["detail"], list
         ), "Detail must be a list per INTERFACE.md validation error shape"
+
+    def test_sidecar_body_validation_from_build_app_returns_422(
+        self,
+    ) -> None:
+        """Canary: sidecar sub-app returns 422 for body validation errors.
+
+        This is the key regression test for issue #187 on the *body*
+        validation path.  The parametrised
+        ``test_validation_status_per_boundary`` only exercises path
+        validation (``loc[0]="path"``), which also returned 422 before
+        the fix.  This test exercises *body* validation — the case that
+        was broken (returned 400) before the per-boundary split.
+
+        A canary ``POST /test/canary`` endpoint is added to the sidecar
+        sub-app (the sub-app mounted at ``/`` on the parent) after
+        ``build_app`` returns.  Sending an empty body triggers a
+        ``RequestValidationError`` with ``loc[0]="body"``, which must
+        reach the sidecar sub-app's handler and return 422.
+
+        The sidecar sub-app is resolved by walking ``app.routes`` and
+        finding the :class:`~starlette.routing.Mount` with ``path="/"``
+        — this is explicit and decoupled from mount registration order.
+        """
+        app = build_app(
+            api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,  # type: ignore[arg-type]
+            guild=_FakeGuild(),  # type: ignore[arg-type]
+            session_factory=_make_session_factory(),
+        )
+
+        # Locate the sidecar sub-app by its mount path ("/"), not by
+        # index, so the test survives future mount-order changes.
+        sidecar_mounts = [r for r in app.routes if isinstance(r, Mount) and r.path == ""]
+        assert sidecar_mounts, (
+            "Expected a Mount with path='' (root) on the parent app — "
+            "did build_app's mount structure change?"
+        )
+        sidecar_sub = sidecar_mounts[0].app
+
+        class _CanaryBody(BaseModel):
+            required_field: int
+
+        @sidecar_sub.post("/test/canary")  # type: ignore[attr-defined]
+        async def _canary(body: _CanaryBody) -> dict[str, bool]:
+            return {"ok": True}
+
+        client = TestClient(app, raise_server_exceptions=False)
+
+        # Empty body → missing required_field → RequestValidationError
+        # with loc[0]="body".  Must return 422 via the sidecar handler.
+        response = client.post(
+            "/test/canary",
+            json={},
+            headers=_auth(),
+        )
+        assert response.status_code == 422, (
+            f"Sidecar body validation must return 422 (issue #187), " f"got {response.status_code}"
+        )
+
+        # Wrong type → also a body ValidationError → 422.
+        response_wrong_type = client.post(
+            "/test/canary",
+            json={"required_field": "not-an-int"},
+            headers=_auth(),
+        )
+        assert response_wrong_type.status_code == 422, (
+            f"Sidecar body type-validation must return 422 (issue #187), "
+            f"got {response_wrong_type.status_code}"
+        )
 
 
 # ---------------------------------------------------------------------------
