@@ -39,9 +39,8 @@
 //   binding automatically — no dependsOn needed, no ARM validation race.
 //
 // Role assignments:
-// - mom-bot-gha (deploy pipeline) → Container Apps Contributor at RG scope
-//   so the deploy workflow can call az containerapp update. Granted at RG scope
-//   so any future Container Apps in the same RG are automatically covered.
+// - (none managed by this module — GHA SP bootstrap roles are granted out-of-band
+//   via the aad-runbook.md bootstrap steps, not in Bicep)
 
 @description('Azure region.')
 param location string
@@ -64,9 +63,6 @@ param containerImage string
 @description('Name of the Key Vault (used to build env var KV_NAME).')
 param keyVaultName string
 
-@description('Object ID of the mom-bot-gha service principal for deploy-time Container Apps access.')
-param ghaServicePrincipalObjectId string
-
 @description('URI of the Key Vault (e.g. https://kv-mombot-eastus2.vault.azure.net/). Used for KV-backed secret references.')
 param keyVaultUri string
 
@@ -82,13 +78,6 @@ param fileShareName string = 'mom-bot-data'
 @description('Policy 1 (issue #87): single-writer enforcement. @allowed([1]) makes maxReplicas > 1 a hard Bicep build error, preventing accidental multi-replica deployments that would corrupt the SQLite DB.')
 @allowed([1])
 param maxReplicas int = 1
-
-// ---------------------------------------------------------------------------
-// Built-in RBAC role definition IDs (stable; do not parameterize)
-// ---------------------------------------------------------------------------
-
-// Container Apps Contributor — allows create, update, delete on Container Apps and Environments.
-var containerAppsContributorRoleId = '358470bc-b998-42bd-ab17-a7e34c199c0f'
 
 // ---------------------------------------------------------------------------
 // Container Apps Environment (Consumption profile)
@@ -251,23 +240,6 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
     }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Role assignment — mom-bot-gha: Container Apps Contributor at RG scope
-// ---------------------------------------------------------------------------
-
-resource roleAssignmentGHA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(resourceGroup().id, ghaServicePrincipalObjectId, containerAppsContributorRoleId)
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      containerAppsContributorRoleId
-    )
-    principalId: ghaServicePrincipalObjectId
-    principalType: 'ServicePrincipal'
   }
 }
 

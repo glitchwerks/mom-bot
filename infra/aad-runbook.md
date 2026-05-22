@@ -105,23 +105,49 @@ Remove-Item $TempFile
 
 ---
 
-## Step 4 — Export the SP Object ID as an environment variable
+## Step 4 — Save the SP Object ID for use in later steps
 
-The SP Object ID is captured in `$SpObjectId` from Step 2. Export it as
-`$env:GHA_SP_OBJECT_ID` before running the deploy so that `infra/main.bicepparam`
-can read it via `readEnvironmentVariable('GHA_SP_OBJECT_ID')`. This satisfies
-Bicep's strict `.bicepparam` contract (every declared param must have an
-assignment) while keeping the value out of the repo.
+The SP Object ID is captured in `$SpObjectId` from Step 2. Keep it in scope for
+the bootstrap grant commands in Step 4.5.
 
 ```powershell
-$env:GHA_SP_OBJECT_ID = $SpObjectId
+# Keep $SpObjectId in scope — used in Step 4.5 grant commands.
+Write-Host "SpObjectId=$SpObjectId"
 ```
 
 ---
 
 ## Step 4.5 — Grant SP subscription-scope deploy permission
 
-`mom-bot-gha` holds RG-scoped Container Apps Contributor on `mom-bot` (granted by `infra/modules/containerapp.bicep`), but `az deployment sub create` requires `Microsoft.Resources/deployments/write` at **subscription** scope — RG-scope is insufficient because the deployment resource itself is created at sub scope. The manual workstation deploys in Step 5 work because the operator's own AAD account holds Owner; the SP cannot bootstrap itself. Granting this role requires Owner or User Access Administrator at sub scope and must be operator-run.
+`mom-bot-gha` needs `az deployment sub create` permission and its own runtime access roles. These are **bootstrap grants** — assigned here (out-of-band), not by Bicep. Bicep does not grant the GHA SP its own roles; it only assigns roles to runtime identities it creates (i.e. `mi-mom-bot`).
+
+`az deployment sub create` requires `Microsoft.Resources/deployments/write` at **subscription** scope — RG-scope is insufficient because the deployment resource itself is created at sub scope. The manual workstation deploys in Step 5 work because the operator's own AAD account holds Owner; the SP cannot bootstrap itself. Granting these roles requires Owner or User Access Administrator and must be operator-run.
+
+### Bootstrap grants for mom-bot-gha SP
+
+Grant the SP the two runtime roles it needs before Bicep has run:
+
+```powershell
+$gha = az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
+$SUB = az account show --query id -o tsv
+$KvId = az keyvault show -g mom-bot -n kv-mombot-eastus2 --query id -o tsv
+
+# Container Apps Contributor at RG scope — required for az containerapp update in deploy.yml
+az role assignment create `
+  --assignee-object-id $gha `
+  --assignee-principal-type ServicePrincipal `
+  --role "Container Apps Contributor" `
+  --scope "/subscriptions/$SUB/resourceGroups/mom-bot"
+
+# Key Vault Secrets Officer at KV scope — required for GHA to write/rotate secrets
+az role assignment create `
+  --assignee-object-id $gha `
+  --assignee-principal-type ServicePrincipal `
+  --role "Key Vault Secrets Officer" `
+  --scope $KvId
+```
+
+> These grants are intentionally out of Bicep. Bicep cannot safely manage SP self-grants: the SP must already hold `roleAssignments/write` before Bicep can run, so putting those grants inside Bicep creates a bootstrap circular dependency. See #174 for the decision thread.
 
 ### Role definition JSON
 
@@ -176,7 +202,9 @@ After Phase 0.5 lands, `az role assignment list` should show these three assignm
 |---|---|
 | Mom-bot GHA Subscription Deployer | `/subscriptions/<sub-id>` |
 | Container Apps Contributor | `.../resourceGroups/mom-bot` |
-| Key Vault Secrets Officer | `.../Microsoft.KeyVault/vaults/kv-mombot-eastus2` |
+| Key Vault Secrets Officer | `.../resourceGroups/mom-bot` (or narrower KV scope) |
+
+> **Note:** `Container Apps Contributor` and `Key Vault Secrets Officer` are bootstrap grants — assigned out-of-band (not by Bicep). Bicep only manages the `Key Vault Secrets User` assignment for `mi-mom-bot`.
 
 ### Fallback
 
@@ -188,21 +216,22 @@ See plan `docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md
 
 ## Step 4.6 — Grant SP constrained RBAC Admin at RG scope (issue #167)
 
-`infra-deploy.yml` runs `az deployment sub create`, which causes Bicep to write Key Vault (KV) role assignments via the ARM `Microsoft.Authorization/roleAssignments` resource. For that write to succeed, the SP needs `Microsoft.Authorization/roleAssignments/write` at a scope that covers the KV. This step grants the role at RG scope (not KV scope directly) — see design rationale below. Rather than granting the SP a broad User Access Administrator role (which allows assigning any role), this step grants `Role Based Access Control Administrator` constrained by an ABAC condition that limits the SP to assigning only **Key Vault Secrets User** and **Key Vault Secrets Officer**.
+`infra-deploy.yml` runs `az deployment sub create`, which causes Bicep to write Key Vault (KV) role assignments via the ARM `Microsoft.Authorization/roleAssignments` resource. For that write to succeed, the SP needs `Microsoft.Authorization/roleAssignments/write` at a scope that covers the KV. This step grants the role at RG scope (not KV scope directly) — see design rationale below. Rather than granting the SP a broad User Access Administrator role (which allows assigning any role), this step grants `Role Based Access Control Administrator` constrained by an ABAC condition that limits the SP to assigning only **Key Vault Secrets User**.
 
 **What this grants:**
 - Role: `Role Based Access Control Administrator` (built-in `f58310d9-a9f6-439a-9e8d-f62e7b41a168`)
 - Scope: `/subscriptions/<sub-id>/resourceGroups/mom-bot`
 - Assignable roles (via ABAC condition):
   - `Key Vault Secrets User` (`4633458b-17de-408a-b874-0445c86b69e6`)
-  - `Key Vault Secrets Officer` (`b86a8fe4-44ce-4948-aee5-eccb2c155cd7`)
+
+**Design principle:** Bicep only assigns roles to runtime identities it creates (e.g. `mi-mom-bot`). SP self-grants — where `mom-bot-gha` grants itself `Key Vault Secrets Officer` or `Container Apps Contributor` — belong in the bootstrap runbook (Step 4.5 or earlier), not in Bicep. This keeps the ABAC allow-list narrow: the only role Bicep needs to assign is `Key Vault Secrets User` for the managed identity.
 
 The condition covers both `roleAssignments/write` (create) and `roleAssignments/delete` (remove) actions, with the appropriate attribute source for each (`@Request` for write, `@Resource` for delete), per the [Azure ABAC delegation examples](https://learn.microsoft.com/en-us/azure/role-based-access-control/delegate-role-assignments-examples) (fetched 2026-05-21).
 
 **Full condition expression (verbatim):**
 
 ```
-((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))
+((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6}))
 ```
 
 **Condition syntax reference:** [Azure ABAC condition format and syntax](https://learn.microsoft.com/en-us/azure/role-based-access-control/conditions-format) (fetched 2026-05-21) — `ForAnyOfAnyValues:GuidEquals` is the correct operator for GUID set-membership on `RoleDefinitionId`.
@@ -214,7 +243,7 @@ The `az role assignment create --condition` flag has a bug on some CLI versions 
 ```powershell
 $SUB = az account show --query id -o tsv
 $gha = az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
-$CONDITION = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
+$CONDITION = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6}))"
 
 # Generate a random assignment GUID
 $ASSIGNMENT_ID = [guid]::NewGuid().ToString()
@@ -242,7 +271,7 @@ If `az role assignment create` works in your environment (future CLI versions ma
 ```bash
 SUB=$(az account show --query id -o tsv)
 GHA=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
-CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
+CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6}))"
 
 az role assignment create \
   --role "Role Based Access Control Administrator" \
@@ -272,19 +301,21 @@ az role assignment list \
   -o json
 ```
 
-Expected output confirms: role is `Role Based Access Control Administrator`, scope ends in `.../resourceGroups/mom-bot`, and the condition string contains both KV role GUIDs.
+Expected output confirms: role is `Role Based Access Control Administrator`, scope ends in `.../resourceGroups/mom-bot`, and the condition string contains only the `Key Vault Secrets User` GUID (`4633458b-17de-408a-b874-0445c86b69e6`).
 
 ### Expected full role listing after this step
 
-| Role | Scope |
-|---|---|
-| Mom-bot GHA Subscription Deployer | `/subscriptions/<sub-id>` |
-| Contributor | `.../resourceGroups/mom-bot` |
-| Container Apps Contributor | `.../resourceGroups/mom-bot` |
-| Role Based Access Control Administrator | `.../resourceGroups/mom-bot` |
-| Key Vault Secrets Officer | `.../resourceGroups/mom-bot/.../kv-mombot-eastus2` |
+| Role | Scope | How assigned |
+|---|---|---|
+| Mom-bot GHA Subscription Deployer | `/subscriptions/<sub-id>` | Step 4.5 (manual bootstrap) |
+| Container Apps Contributor | `.../resourceGroups/mom-bot` | Step 4.5 (manual bootstrap) |
+| Key Vault Secrets Officer | `.../resourceGroups/mom-bot/.../kv-mombot-eastus2` | Step 4.5 (manual bootstrap) |
+| Contributor | `.../resourceGroups/mom-bot` | Step 4.5 fallback expedient (see note) |
+| Role Based Access Control Administrator | `.../resourceGroups/mom-bot` | Step 4.6 (this step) |
 
-> **Note on Contributor + Container Apps Contributor:** Both are confirmed present in the live subscription (verified 2026-05-21). Container Apps Contributor was granted first by Bicep (`infra/modules/containerapp.bicep`) before the broader Contributor role was added as a fallback expedient (see Step 4.5 fallback note). Contributor is a superset of Container Apps Contributor; the narrower role is left in place to avoid disrupting the Bicep-managed assignment — schedule cleanup in a follow-up issue.
+> **Note on Contributor:** A broader `Contributor` grant was added as a fallback expedient (see Step 4.5 fallback note). It is a superset of Container Apps Contributor; schedule cleanup in a follow-up issue.
+>
+> **Note on Bicep vs bootstrap:** `Container Apps Contributor` and `Key Vault Secrets Officer` were previously granted by Bicep (`containerapp.bicep` and `keyvault.bicep`). As of #174 those Bicep resources are removed — the grants are out-of-band bootstrap only. The ABAC condition on `Role Based Access Control Administrator` is narrowed accordingly: it now covers only `Key Vault Secrets User` (the one role Bicep still needs to assign, to `mi-mom-bot`).
 
 **Design rationale:** Granting at RG scope (not KV scope) gives the SP the minimum scope necessary for the Bicep KV role-assignment resource while avoiding subscription-wide RBAC authority. The ABAC condition is the safety layer — without it, RBAC Admin would allow the SP to assign any role to any principal within the RG. See [#167](https://github.com/glitchwerks/mom-bot/issues/167) for the full decision thread.
 
@@ -305,13 +336,6 @@ an empty `principalId`, and Azure rejects the deploy 90 seconds in with `Invalid
 Failing at the pre-flight saves a few minutes of wasted deploy time.
 
 ```powershell
-$env:GHA_SP_OBJECT_ID = $SpObjectId
-
-# Pre-flight: refuse to deploy if the env var didn't survive (e.g. fresh shell)
-if (-not $env:GHA_SP_OBJECT_ID) {
-  throw "GHA_SP_OBJECT_ID is not set. Export it from `$SpObjectId (see Step 2) before re-running."
-}
-
 az deployment sub create `
   --location eastus2 `
   --template-file infra/main.bicep `
@@ -327,21 +351,12 @@ az deployment sub create `
 Bicep handles the following RBAC role assignments:
 
 - `mi-mom-bot` → **Key Vault Secrets User** (runtime read-only)
-- `mom-bot-gha` SP → **Key Vault Secrets Officer** (deploy-time read+write)
-- `mom-bot-gha` SP → **Container Apps Contributor** at RG `mom-bot` scope (granted by Bicep at deploy time; required for `az containerapp update` in `deploy.yml`)
 
-If the Bicep role assignments fail (e.g. `ghaServicePrincipalObjectId` was wrong),
+If the Bicep role assignment fails (e.g. `managedIdentityPrincipalId` was wrong),
 assign manually:
 
 ```powershell
 $KvId = az keyvault show -g mom-bot -n kv-mombot-eastus2 --query id -o tsv
-
-# Key Vault Secrets Officer for the GHA service principal
-az role assignment create `
-  --role "Key Vault Secrets Officer" `
-  --assignee-object-id $SpObjectId `
-  --assignee-principal-type ServicePrincipal `
-  --scope $KvId
 
 # Key Vault Secrets User for the managed identity
 $MiPrincipalId = az identity show -g mom-bot -n mi-mom-bot --query principalId -o tsv
@@ -351,6 +366,8 @@ az role assignment create `
   --assignee-principal-type ServicePrincipal `
   --scope $KvId
 ```
+
+GHA SP bootstrap roles (`Key Vault Secrets Officer`, `Container Apps Contributor`) are granted out-of-band in Step 4.5 — they are not managed by Bicep.
 
 ---
 
@@ -568,10 +585,9 @@ GitHub repo → Actions → Deploy infra (Bicep apply) → Run workflow → Run 
 The workflow:
 1. Checks out the repo (at `commit_sha` if supplied, else `main` HEAD).
 2. Logs in via OIDC (`mom-bot-gha` app registration — same as `deploy.yml` and `infra-what-if.yml`).
-3. Resolves the SP object ID → `GHA_SP_OBJECT_ID` env var (required by `main.bicepparam`).
-4. Resolves the live container image → `CONTAINER_IMAGE` env var (prevents phantom diffs).
-5. Runs `az deployment sub create` — deployment named `infra-<run_id>` for portal traceability.
-6. Writes a summary to the Actions run page (deployment name + subscription + portal navigation hint).
+3. Resolves the live container image → `CONTAINER_IMAGE` env var (prevents phantom diffs).
+4. Runs `az deployment sub create` — deployment named `infra-<run_id>` for portal traceability.
+5. Writes a summary to the Actions run page (deployment name + subscription + portal navigation hint).
 
 After the workflow completes, continue to Step 5.5 (Entra admin creation on Postgres) if this is a cold-start or the Postgres server was recreated.
 
@@ -714,7 +730,7 @@ az deployment sub create `
 - [ ] Step 2 — Service principal created; `$SpObjectId` saved
 - [ ] Step 3a — Federated credential for `main` push created
 - [ ] Step 3b — Federated credential for pull requests created
-- [ ] Step 4 — `$env:GHA_SP_OBJECT_ID` exported in session
+- [ ] Step 4 — `$SpObjectId` in scope for Step 4.5 grant commands
 - [ ] Step 4.5 (one-time) — Custom role `Mom-bot GHA Subscription Deployer` created and assigned to `mom-bot-gha` at subscription scope
 - [ ] Step 4.6 (one-time) — `Role Based Access Control Administrator` granted to `mom-bot-gha` at RG scope with ABAC condition constraining assignable roles to KV Secrets User/Officer (see #167)
 - [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)

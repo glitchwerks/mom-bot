@@ -2,8 +2,6 @@
 // Scope: subscription — creates the resource group and delegates to modules.
 //
 // Deploy with (PowerShell):
-//   $env:GHA_SP_OBJECT_ID = $SpObjectId
-//   if (-not $env:GHA_SP_OBJECT_ID) { throw "Set GHA_SP_OBJECT_ID first" }
 //   az deployment sub create `
 //     --location eastus2 `
 //     --template-file infra/main.bicep `
@@ -34,9 +32,6 @@ param containerAppsEnvironmentName string = 'cae-mom-bot-eastus2'
 
 @description('Name of the Container App.')
 param containerAppName string = 'ca-mom-bot'
-
-@description('Object ID (principal ID) of the mom-bot-gha service principal. Run: az ad sp show --id <appId> --query id -o tsv')
-param ghaServicePrincipalObjectId string
 
 @description('Container image reference. Defaults to Microsoft quickstart (always pullable) until Epic 1 wires up GHCR image build+push.')
 param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
@@ -77,7 +72,6 @@ module kv 'modules/keyvault.bicep' = {
     location: location
     keyVaultName: keyVaultName
     managedIdentityPrincipalId: identity.outputs.principalId
-    ghaServicePrincipalObjectId: ghaServicePrincipalObjectId
   }
 }
 
@@ -130,7 +124,6 @@ module containerApp 'modules/containerapp.bicep' = {
     managedIdentityClientId: identity.outputs.clientId
     containerImage: containerImage
     keyVaultName: keyVaultName
-    ghaServicePrincipalObjectId: ghaServicePrincipalObjectId
     keyVaultUri: kv.outputs.uri
     storageAccountName: storage.outputs.storageAccountName
     maxReplicas: 1

@@ -49,21 +49,6 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Resolve SP object ID for Bicep param
-        run: |
-          # az ad sp show returns the *service principal* object ID
-          # (the enterprise-app object in the tenant) — distinct from the
-          # *app registration* object ID returned by `az ad app show`.
-          # Bicep role assignments require the SP object ID, which is
-          # what main.bicepparam expects via GHA_SP_OBJECT_ID.
-          SP_OID=$(az ad sp show --id ${{ vars.AZURE_CLIENT_ID }} --query id -o tsv)
-          echo "GHA_SP_OBJECT_ID=$SP_OID" >> "$GITHUB_ENV"
-
-      - name: Verify GHA_SP_OBJECT_ID export persisted
-        run: |
-          test -n "$GHA_SP_OBJECT_ID" || { echo "::error::GHA_SP_OBJECT_ID empty in subsequent step"; exit 1; }
-          echo "SP OID present (length=${#GHA_SP_OBJECT_ID})"
-
       - name: Resolve current live container image
         run: |
           # Fetch the image currently running in prod so the bicepparam's
