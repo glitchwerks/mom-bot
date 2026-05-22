@@ -194,7 +194,7 @@ See plan `docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md
 - Role: `Role Based Access Control Administrator` (built-in `f58310d9-a9f6-439a-9e8d-f62e7b41a168`)
 - Scope: `/subscriptions/<sub-id>/resourceGroups/mom-bot`
 - Assignable roles (via ABAC condition):
-  - `Key Vault Secrets User` (`4633458b-17de-41a5-8b4b-ea0e69bca6cb`)
+  - `Key Vault Secrets User` (`4633458b-17de-408a-b874-0445c86b69e6`)
   - `Key Vault Secrets Officer` (`b86a8fe4-44ce-4948-aee5-eccb2c155cd7`)
 
 The condition covers both `roleAssignments/write` (create) and `roleAssignments/delete` (remove) actions, with the appropriate attribute source for each (`@Request` for write, `@Resource` for delete), per the [Azure ABAC delegation examples](https://learn.microsoft.com/en-us/azure/role-based-access-control/delegate-role-assignments-examples) (fetched 2026-05-21).
@@ -202,7 +202,7 @@ The condition covers both `roleAssignments/write` (create) and `roleAssignments/
 **Full condition expression (verbatim):**
 
 ```
-((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))
+((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))
 ```
 
 **Condition syntax reference:** [Azure ABAC condition format and syntax](https://learn.microsoft.com/en-us/azure/role-based-access-control/conditions-format) (fetched 2026-05-21) — `ForAnyOfAnyValues:GuidEquals` is the correct operator for GUID set-membership on `RoleDefinitionId`.
@@ -214,7 +214,7 @@ The `az role assignment create --condition` flag has a bug on some CLI versions 
 ```powershell
 $SUB = az account show --query id -o tsv
 $gha = az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv
-$CONDITION = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
+$CONDITION = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
 
 # Generate a random assignment GUID
 $ASSIGNMENT_ID = [guid]::NewGuid().ToString()
@@ -242,7 +242,7 @@ If `az role assignment create` works in your environment (future CLI versions ma
 ```bash
 SUB=$(az account show --query id -o tsv)
 GHA=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
-CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-41a5-8b4b-ea0e69bca6cb, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
+CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7}))"
 
 az role assignment create \
   --role "Role Based Access Control Administrator" \
