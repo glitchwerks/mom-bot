@@ -1,12 +1,14 @@
 """FastAPI sidecar application for mom-bot (Epic 2.6 B2).
 
-Exposes ``POST /api/internal/role-sync`` — the webhook endpoint that
-``rsl-siege-manager`` (siege-web) calls when a member's attack-day
-assignment changes.  The endpoint is Bearer-token-gated, persists
-idempotency state to a SQLite table, and delegates the Discord role
-operations to :func:`~mom_bot.roles.service.apply_day_role`.
+Exposes the following endpoints:
 
-Decision tree (per contract spec § 6–7 and issue #65 AC):
+- ``GET /api/version`` — no auth; returns the sidecar version string.
+- ``GET /api/health`` — no auth; returns bot-connected status.
+- ``POST /api/internal/role-sync`` — Bearer-gated webhook that siege-web
+  calls when a member's attack-day assignment changes.
+
+``/api/internal/role-sync`` decision tree (per contract spec § 6–7 and
+issue #65 AC):
 
 1. Bearer auth fails → ``401 Unauthorized``.
 2. Request body fails Pydantic validation → ``400 Bad Request``.
@@ -47,18 +49,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
-from typing import Annotated, Any, Literal
+import os
+from typing import Any, Literal
 from weakref import WeakValueDictionary
 
 import discord
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
+from mom_bot import __version__ as _pkg_version
 from mom_bot.roles.service import apply_day_role
+from mom_bot.sidecar.auth import make_bearer_dependency
 from mom_bot.sidecar.models import MemberRoleSyncState
 
 __all__ = ["build_app"]
@@ -167,29 +171,45 @@ class RoleSyncResponse(BaseModel):
 def build_app(
     *,
     api_key: str,
+    bot: discord.Client,
     guild: discord.Guild,
     session_factory: sessionmaker[Session],
 ) -> FastAPI:
     """Construct the sidecar FastAPI application.
 
-    The app is stateless beyond its closure over ``api_key``, ``guild``, and
-    ``session_factory`` — all three are supplied at construction time so the
-    same factory can be used in tests (with an in-memory DB and a mock guild)
-    and in production (with a live Discord guild and a file-backed SQLite DB).
+    The app is stateless beyond its closure over ``api_key``, ``bot``,
+    ``guild``, and ``session_factory`` — all four are supplied at construction
+    time so the same factory can be used in tests (with an in-memory DB and
+    fake objects) and in production (with a live Discord gateway and a
+    file-backed SQLite DB).
+
+    Endpoints registered:
+
+    - ``GET /api/version`` — no auth; version string from ``mom_bot.__version__``
+      optionally suffixed with ``+<BUILD_NUMBER>.<GIT_SHA[:7]>`` env vars.
+    - ``GET /api/health`` — no auth; ``{"status": "healthy",
+      "bot_connected": <bool>}`` where ``bot_connected`` reflects
+      ``bot.is_ready()`` at handler call time (not cached).
+    - ``POST /api/internal/role-sync`` — Bearer-gated; existing role-sync
+      endpoint documented in this module's docstring.
 
     Args:
         api_key: Expected Bearer token value.  Requests whose
             ``Authorization`` header does not match are rejected with ``401``.
+        bot: The :class:`discord.Client` instance.  Consulted in the
+            ``/api/health`` handler via ``bot.is_ready()`` at request time.
         guild: The connected :class:`discord.Guild` passed to
             :func:`~mom_bot.roles.service.apply_day_role`.
         session_factory: Bound SQLAlchemy session factory used for all DB
             reads and writes inside the endpoint handler.
 
     Returns:
-        A fully-configured :class:`fastapi.FastAPI` instance with the
-        ``/api/internal/role-sync`` route registered.
+        A fully-configured :class:`fastapi.FastAPI` instance with all
+        sidecar routes registered.
     """
     app = FastAPI(title="mom-bot sidecar", docs_url=None, redoc_url=None)
+
+    _require_bearer = make_bearer_dependency(api_key=api_key)
 
     # ------------------------------------------------------------------
     # Override FastAPI's default 422 validation error → return 400 instead.
@@ -231,30 +251,49 @@ def build_app(
         )
 
     # ------------------------------------------------------------------
-    # Auth dependency
+    # Public endpoints (no auth)
     # ------------------------------------------------------------------
 
-    def _require_bearer(
-        authorization: Annotated[str | None, Header()] = None,
-    ) -> None:
-        """Validate the Bearer token in the Authorization header.
+    @app.get("/api/version")
+    async def version() -> dict[str, str]:
+        """Return the sidecar version string.
 
-        Args:
-            authorization: Value of the ``Authorization`` header,
-                automatically extracted by FastAPI.
+        Reads the version from the ``mom_bot`` package.  When both
+        ``BUILD_NUMBER`` and ``GIT_SHA`` environment variables are set (CI-
+        built images), appends ``+<BUILD_NUMBER>.<GIT_SHA[:7]>`` to form a
+        full build-qualified version.  In local development the bare package
+        version is returned.
 
-        Raises:
-            HTTPException: 401 if the header is absent or the token
-                does not match ``api_key``.
+        Returns:
+            A dict with a single ``version`` key containing the version
+            string, e.g. ``{"version": "0.0.1+42.abcdef1"}``.
         """
-        if authorization is None:
-            raise HTTPException(status_code=401, detail="Missing Authorization header")
-        scheme, _, token = authorization.partition(" ")
-        if scheme.lower() != "bearer" or not secrets.compare_digest(token, api_key):
-            raise HTTPException(status_code=401, detail="Invalid bearer token")
+        semver = _pkg_version
+        build_number = os.environ.get("BUILD_NUMBER", "")
+        git_sha = os.environ.get("GIT_SHA", "")
+        if build_number and git_sha:
+            ver = f"{semver}+{build_number}.{git_sha[:7]}"
+        else:
+            ver = semver
+        return {"version": ver}
+
+    @app.get("/api/health")
+    async def health() -> dict[str, object]:
+        """Return bot connectivity status.
+
+        Calls ``bot.is_ready()`` at handler execution time on every request —
+        the result is **not** cached.  This ensures the response reflects the
+        bot's gateway state at the moment the health probe runs rather than
+        a stale snapshot from app construction.
+
+        Returns:
+            A dict with ``status`` (always ``"healthy"``) and
+            ``bot_connected`` (bool) reflecting ``bot.is_ready()`` right now.
+        """
+        return {"status": "healthy", "bot_connected": bot.is_ready()}
 
     # ------------------------------------------------------------------
-    # Route
+    # Routes (Bearer-gated)
     # ------------------------------------------------------------------
 
     @app.post(

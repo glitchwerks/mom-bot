@@ -72,6 +72,21 @@ from mom_bot.sidecar.app import build_app
 from mom_bot.sidecar.models import MemberRoleSyncState
 
 # ---------------------------------------------------------------------------
+# Minimal fake bot for build_app(bot=...) parameter (issue #176)
+# ---------------------------------------------------------------------------
+
+
+class _FakeBot:
+    """Minimal stand-in for discord.Client used by build_app."""
+
+    def is_ready(self) -> bool:
+        """Always reports ready — role-sync tests do not exercise health."""
+        return True
+
+
+_FAKE_BOT = _FakeBot()
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -189,6 +204,7 @@ def client(
     """
     app = build_app(
         api_key=_VALID_TOKEN,
+        bot=_FAKE_BOT,
         guild=mock_guild,
         session_factory=session_factory,
     )
@@ -228,6 +244,7 @@ class TestAuth:
         """No Authorization header → 401."""
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -243,6 +260,7 @@ class TestAuth:
         """Wrong bearer token → 401."""
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -343,6 +361,7 @@ class TestFreshWriteSuccess:
         )
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -372,6 +391,7 @@ class TestFreshWriteSuccess:
         result = RoleSyncResult(status="applied", added=[300], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -406,6 +426,7 @@ class TestFreshWriteSuccess:
         )
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -434,6 +455,7 @@ class TestFreshWriteSuccess:
         result = RoleSyncResult(status="skipped", reason="role_not_seeded")
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -460,6 +482,7 @@ class TestFreshWriteSuccess:
         result = RoleSyncResult(status="skipped", reason="already_has_role")
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -487,6 +510,7 @@ class TestFreshWriteSuccess:
         unassign_payload = _VALID_UNASSIGN_PAYLOAD
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -518,6 +542,7 @@ class TestFreshWriteSuccess:
         )
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -546,6 +571,7 @@ class TestFreshWriteSuccess:
         result = RoleSyncResult(status="failed", added=[], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -591,6 +617,7 @@ class TestExactReplay:
         mock_service = AsyncMock(return_value=result)
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -626,6 +653,7 @@ class TestExactReplay:
         result = RoleSyncResult(status="applied", added=[300], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -681,6 +709,7 @@ class TestStaleWrite:
         mock_service = AsyncMock(return_value=result)
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -725,6 +754,7 @@ class TestStaleWrite:
         result = RoleSyncResult(status="applied", added=[300], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -780,6 +810,7 @@ class TestFreshWriteUpdate:
         result = RoleSyncResult(status="applied", added=[300], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -825,6 +856,7 @@ class TestStructuredLogging:
         result = RoleSyncResult(status="applied", added=[300], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -874,6 +906,7 @@ class TestDbPersistence:
         result = RoleSyncResult(status="applied", added=[300], removed=[])
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
@@ -962,6 +995,7 @@ class TestConcurrentRequestSerialization:
             # correctly in async context.
             _app = _build_app(
                 api_key=_VALID_TOKEN,
+                bot=_FAKE_BOT,
                 guild=mock_guild,
                 session_factory=session_factory,
             )
@@ -1055,6 +1089,7 @@ class TestMalformedStoredJson:
         mock_service = AsyncMock(return_value=apply_result)
         app = build_app(
             api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
             guild=mock_guild,
             session_factory=session_factory,
         )
