@@ -36,7 +36,8 @@ Each phase: its own branch (`issue-<N>`), worktree (`.worktrees/issue-<N>`), and
 
 These apply to every endpoint and every test file in this plan:
 
-- **Bearer auth.** Use the existing `_require_bearer` dependency from `src/mom_bot/sidecar/auth.py` (introduced in Phase 2, PR #184). Do not roll new auth.
+- **Sub-app architecture.** As of PR #189 (issue #187, merged 2026-05-22), `build_app()` returns a parent FastAPI app with two mounted sub-apps: a **sidecar sub-app** (all `siege-web/bot/INTERFACE.md` endpoints) and a **role-sync sub-app** (`/api/internal/role-sync`). **Phases 4–6 endpoints must register on the sidecar sub-app**, not on the parent or on the role-sync sub-app. The sidecar sub-app has its own `RequestValidationError` handler that returns **422** for path/body/query validation errors (the contract this whole plan is conforming to). Find the sub-app definition in `src/mom_bot/sidecar/app.py` and follow Phase 3's `/api/members` registration pattern.
+- **Bearer auth.** Use the existing `_require_bearer` dependency from `src/mom_bot/sidecar/auth.py` (introduced in Phase 2, PR #184; **403 on missing-header** behavior corrected in PR #188, issue #186, merged 2026-05-22). Do not roll new auth.
 - **Missing-header response is `403`, not `401`.** This is asserted by `siege-web/backend/tests/integration/sidecar/test_auth.py:29-134` across all four endpoints. The `HTTPBearer(auto_error=True)` scaffold from Phase 2 already produces 403; do not regress.
 - **`@everyone` is excluded** from any `roles` / `role_names` list returned by the sidecar — established in Phase 3.
 - **Discord-exception translation** — `INTERFACE.md` Quick-Start § "Translate Discord errors to HTTP status codes" + § "Error semantics" is the authoritative mapping. As of plan-write time it reads:
