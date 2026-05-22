@@ -5,7 +5,7 @@ Phase 2 of Epic #128 sidecar replacement (issue #176).
 Covers:
 - GET /api/version: 200 + correct body shape; env var combinations
 - GET /api/health: 200 + bot_connected reflects is_ready() per-request
-- Bearer auth: missing header → 401, wrong token → 401 + WWW-Authenticate,
+- Bearer auth: missing header → 403, wrong token → 401 + WWW-Authenticate,
   correct token → endpoint runs
 - is_ready() is called on EACH health request (not cached)
 
@@ -298,9 +298,14 @@ class TestGetHealth:
 class TestBearerAuth:
     """Bearer auth dependency conformance: missing / wrong / correct token."""
 
-    def test_missing_auth_header_returns_4xx(self) -> None:
+    def test_missing_auth_header_returns_403(self) -> None:
         """A request to a protected endpoint with no Authorization header
-        must return 401 or 403 (sidecar returns 401 per its auth.py choice).
+        must return 403 per the executable contract.
+
+        Per siege-web/backend/tests/integration/sidecar/test_auth.py:29-134
+        and INTERFACE.md § Authentication: missing header → 403, wrong
+        token → 401 + WWW-Authenticate: Bearer.
+        Issue: glitchwerks/mom-bot#186.
         """
         client = _make_client()
         # POST /api/internal/role-sync is a protected endpoint.
@@ -315,30 +320,9 @@ class TestBearerAuth:
                 "correlation_id": "test-corr-id",
             },
         )
-        assert response.status_code in (
-            401,
-            403,
-        ), f"Expected 401 or 403 for missing auth header; got {response.status_code}"
-
-    def test_missing_auth_header_returns_401(self) -> None:
-        """Mom-bot sidecar returns 401 (not 403) when Authorization header
-        is absent.  This is the explicit choice documented in auth.py.
-        """
-        client = _make_client()
-        response = client.post(
-            "/api/internal/role-sync",
-            json={
-                "discord_id": "111",
-                "siege_id": 1,
-                "day_number": 1,
-                "action": "assign",
-                "assigned_at": "2024-01-01T00:00:00Z",
-                "correlation_id": "test-corr-id",
-            },
-        )
         assert (
-            response.status_code == 401
-        ), f"Expected 401 for missing auth header; got {response.status_code}"
+            response.status_code == 403
+        ), f"Expected 403 for missing auth header; got {response.status_code}"
 
     def test_missing_auth_header_body_has_detail(self) -> None:
         """Missing-header 401/403 response must have a 'detail' string key."""

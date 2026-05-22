@@ -6,7 +6,7 @@ Covers:
 - GET /api/members: 200 + array shape; correct field names; no @everyone leak
 - GET /api/members/{id}: 200 + is_member=true (all 6 keys); is_member=false (all
   6 keys, all null); @everyone excluded from roles/role_names
-- Bearer auth: missing → 401; wrong → 401 + WWW-Authenticate; correct → passes
+- Bearer auth: missing → 403; wrong → 401 + WWW-Authenticate; correct → passes
 - Discord exception translation: Forbidden → 403; 4xx → 502; 5xx/timeout → 503
 - Path validation: non-numeric discord_user_id → 422
 
@@ -273,11 +273,15 @@ def _auth(key: str = _VALID_KEY) -> dict[str, str]:
 class TestGetMembersAuth:
     """Bearer auth gates GET /api/members."""
 
-    def test_missing_auth_returns_401(self) -> None:
-        """No Authorization header → 401."""
+    def test_missing_auth_returns_403(self) -> None:
+        """No Authorization header → 403.
+
+        Per siege-web/backend/tests/integration/sidecar/test_auth.py:61-71
+        and issue glitchwerks/mom-bot#186.
+        """
         client = _make_client()
         response = client.get("/api/members")
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     def test_wrong_token_returns_401(self) -> None:
         """Wrong Bearer token → 401."""
@@ -379,11 +383,15 @@ class TestGetMembersList:
 class TestGetMemberDetailAuth:
     """Bearer auth gates GET /api/members/{discord_user_id}."""
 
-    def test_missing_auth_returns_401(self) -> None:
-        """No Authorization header → 401."""
+    def test_missing_auth_returns_403(self) -> None:
+        """No Authorization header → 403.
+
+        Per siege-web/backend/tests/integration/sidecar/test_auth.py:127-134
+        and issue glitchwerks/mom-bot#186.
+        """
         client = _make_client()
         response = client.get(f"/api/members/{_KNOWN_ID}")
-        assert response.status_code == 401
+        assert response.status_code == 403
 
     def test_wrong_token_returns_401(self) -> None:
         """Wrong Bearer token → 401."""

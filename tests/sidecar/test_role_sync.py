@@ -4,7 +4,7 @@ Covers all acceptance criteria from issue #65:
 
 Auth
 ----
-- Missing bearer → 401
+- Missing bearer → 403 (per glitchwerks/mom-bot#186)
 - Wrong bearer → 401
 - Correct bearer → proceeds to schema validation
 
@@ -236,12 +236,16 @@ def _auth_headers(token: str = _VALID_TOKEN) -> dict[str, str]:
 class TestAuth:
     """Bearer token authentication gates the endpoint."""
 
-    def test_missing_bearer_returns_401(
+    def test_missing_bearer_returns_403(
         self,
         session_factory: sessionmaker[Session],
         mock_guild: MagicMock,
     ) -> None:
-        """No Authorization header → 401."""
+        """No Authorization header → 403.
+
+        Per siege-web/backend/tests/integration/sidecar/test_auth.py:29-39
+        and issue glitchwerks/mom-bot#186.
+        """
         app = build_app(
             api_key=_VALID_TOKEN,
             bot=_FAKE_BOT,
@@ -250,7 +254,7 @@ class TestAuth:
         )
         with TestClient(app) as c:
             resp = c.post("/api/internal/role-sync", json=_VALID_ASSIGN_PAYLOAD)
-        assert resp.status_code == 401
+        assert resp.status_code == 403
 
     def test_wrong_bearer_returns_401(
         self,
