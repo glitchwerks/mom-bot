@@ -6,6 +6,9 @@ Exposes the following endpoints:
 - ``GET /api/health`` — no auth; returns bot-connected status.
 - ``POST /api/internal/role-sync`` — Bearer-gated webhook that siege-web
   calls when a member's attack-day assignment changes.
+- ``GET /api/members`` — Bearer-gated; returns the full guild member list.
+- ``GET /api/members/{discord_user_id}`` — Bearer-gated; returns a single
+  guild member with an ``is_member`` discriminator.
 
 ``/api/internal/role-sync`` decision tree (per contract spec § 6–7 and
 issue #65 AC):
@@ -42,6 +45,35 @@ Structured log record emitted per call (AC requirement):
 
   ``role_sync correlation_id=… discord_id=… siege_id=… day_number=… action=…
   assigned_at=… status=… added=… removed=… attempt=…``
+
+Member endpoints — multi-guild decision
+---------------------------------------
+Both ``GET /api/members`` and ``GET /api/members/{discord_user_id}`` are
+scoped to the **single guild** supplied to :func:`build_app` via the
+``guild`` parameter.  The guild object is constructed at startup from the
+``DISCORD_GUILD_ID`` environment variable and passed in by the entrypoint.
+
+This matches the siege-web sidecar contract, which is inherently single-guild.
+Supporting multiple guilds would require a contract change (a new ``guild_id``
+query/path parameter) and is deferred to a future issue if needed.
+
+Discord exception translation
+------------------------------
+Both member endpoints translate discord.py exceptions to HTTP status codes
+per INTERFACE.md § Error semantics:
+
+- ``discord.Forbidden`` (403 from Discord) → HTTP 403
+- ``discord.HTTPException`` with ``status < 500`` → HTTP 502
+- ``discord.HTTPException`` with ``status >= 500`` → HTTP 503
+- ``asyncio.TimeoutError`` → HTTP 503
+
+``discord.Forbidden`` and ``discord.NotFound`` are subclasses of
+``discord.HTTPException``; they are handled by the more-specific exception
+handlers registered on the app so they do not reach the generic handler.
+
+``discord.NotFound`` from ``guild.fetch_member()`` is **not** an error —
+it means the user is not in the guild, and the endpoint returns 200 with
+``is_member: false`` in that case.
 """
 
 from __future__ import annotations
@@ -54,7 +86,8 @@ from typing import Any, Literal
 from weakref import WeakValueDictionary
 
 import discord
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, status
+from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
@@ -192,13 +225,29 @@ def build_app(
       ``bot.is_ready()`` at handler call time (not cached).
     - ``POST /api/internal/role-sync`` — Bearer-gated; existing role-sync
       endpoint documented in this module's docstring.
+    - ``GET /api/members`` — Bearer-gated; returns ``[{id, username,
+      display_name}]`` for all cached guild members.  The Discord ID field
+      is ``id`` (not ``discord_id``) per INTERFACE.md.
+    - ``GET /api/members/{discord_user_id}`` — Bearer-gated; looks up a
+      single member via ``guild.fetch_member()``.  Returns
+      ``{"is_member": true, "discord_id": ..., ...}`` when found, or
+      ``{"is_member": false, "discord_id": null, ...}`` when the user is
+      not in the guild.  The ``@everyone`` role is excluded from ``roles``
+      and ``role_names``.
+
+    Multi-guild decision (issue #177):
+    Both member endpoints are scoped to the single ``guild`` supplied here.
+    Siege-web's sidecar contract is single-guild; this matches that design.
+    Supporting multiple guilds would require a contract change; file a new
+    issue if that becomes necessary.
 
     Args:
         api_key: Expected Bearer token value.  Requests whose
             ``Authorization`` header does not match are rejected with ``401``.
         bot: The :class:`discord.Client` instance.  Consulted in the
             ``/api/health`` handler via ``bot.is_ready()`` at request time.
-        guild: The connected :class:`discord.Guild` passed to
+        guild: The connected :class:`discord.Guild` used by the member
+            endpoints and passed to
             :func:`~mom_bot.roles.service.apply_day_role`.
         session_factory: Bound SQLAlchemy session factory used for all DB
             reads and writes inside the endpoint handler.
@@ -212,6 +261,103 @@ def build_app(
     _require_bearer = make_bearer_dependency(api_key=api_key)
 
     # ------------------------------------------------------------------
+    # Discord exception → HTTP translation (global handlers).
+    #
+    # Registered per the error-semantics in INTERFACE.md § Error semantics:
+    #   discord.Forbidden (403 from Discord)   → HTTP 403
+    #   discord.HTTPException status < 500     → HTTP 502
+    #   discord.HTTPException status >= 500    → HTTP 503
+    #   asyncio.TimeoutError                   → HTTP 503
+    #
+    # discord.Forbidden is a subclass of discord.HTTPException; FastAPI
+    # resolves exception handlers in MRO order, so the Forbidden handler
+    # fires first and the generic HTTPException handler handles the rest.
+    # discord.NotFound (also a subclass) is handled per-endpoint as
+    # business logic (200 with is_member=false), not error translation.
+    # ------------------------------------------------------------------
+
+    @app.exception_handler(discord.Forbidden)
+    async def _handle_discord_forbidden(
+        _request: Request,
+        exc: discord.Forbidden,
+    ) -> JSONResponse:
+        """Translate discord.Forbidden to HTTP 403.
+
+        Raised when the bot lacks permissions (e.g. cannot fetch member
+        data from a locked-down server).  Raw ``exc.text`` is logged
+        server-side but never exposed in response bodies.
+
+        Args:
+            _request: The incoming FastAPI request (unused).
+            exc: The :class:`discord.Forbidden` exception.
+
+        Returns:
+            JSONResponse with status 403 and a generic detail message.
+        """
+        _logger.warning("Discord Forbidden: status=%s text=%r", exc.status, exc.text)
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Discord permission denied"},
+        )
+
+    @app.exception_handler(discord.HTTPException)
+    async def _handle_discord_http_exception(
+        _request: Request,
+        exc: discord.HTTPException,
+    ) -> JSONResponse:
+        """Translate discord.HTTPException to 502 or 503.
+
+        ``discord.Forbidden`` is handled by its own more-specific handler
+        above and will NOT reach this handler.
+
+        Status mapping:
+        - ``exc.status < 500``  → 502 Bad Gateway (upstream Discord 4xx)
+        - ``exc.status >= 500`` → 503 Service Unavailable (Discord 5xx)
+
+        Raw ``exc.status`` and ``exc.text`` are logged server-side but
+        excluded from response bodies per the error envelope policy.
+
+        Args:
+            _request: The incoming FastAPI request (unused).
+            exc: The :class:`discord.HTTPException` instance.
+
+        Returns:
+            JSONResponse with status 502 or 503 and a generic detail.
+        """
+        _logger.warning("Discord HTTPException: status=%s text=%r", exc.status, exc.text)
+        if exc.status < 500:
+            return JSONResponse(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                content={"detail": "Upstream Discord error"},
+            )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "Discord temporarily unavailable"},
+        )
+
+    @app.exception_handler(asyncio.TimeoutError)
+    async def _handle_timeout(
+        _request: Request,
+        exc: asyncio.TimeoutError,
+    ) -> JSONResponse:
+        """Translate asyncio.TimeoutError to HTTP 503.
+
+        Raised when a Discord API call exceeds its timeout.
+
+        Args:
+            _request: The incoming FastAPI request (unused).
+            exc: The :class:`asyncio.TimeoutError` instance.
+
+        Returns:
+            JSONResponse with status 503 and a generic detail message.
+        """
+        _logger.warning("Discord timeout: %r", exc)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "Discord temporarily unavailable"},
+        )
+
+    # ------------------------------------------------------------------
     # Override FastAPI's default 422 validation error → return 400 instead.
     # The contract specifies 400 for invalid schema, not 422.
     # ------------------------------------------------------------------
@@ -221,7 +367,13 @@ def build_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        """Convert Pydantic validation errors to 400 Bad Request.
+        """Convert Pydantic validation errors to 400 or 422.
+
+        Request body and query-parameter validation errors are returned as
+        ``400 Bad Request`` per the role-sync contract spec.  Path-parameter
+        validation errors (``loc[0] == "path"``) are returned as
+        ``422 Unprocessable Entity`` per the members endpoint contract
+        (INTERFACE.md § ``GET /api/members/{discord_user_id}``).
 
         Pydantic v2's ``exc.errors()`` may include non-JSON-serializable
         objects (e.g. ``ValueError`` instances in the ``ctx`` key).  We
@@ -232,22 +384,32 @@ def build_app(
             exc: The validation exception raised by Pydantic.
 
         Returns:
-            A 400 JSON response with the validation detail.
+            A 400 or 422 JSON response with the validation detail.
         """
+        errors = exc.errors()
+
+        # If every error originates from a path parameter, return 422 so
+        # that path-validation on /api/members/{discord_user_id} conforms
+        # to INTERFACE.md.  Body/query errors retain 400 (role-sync spec).
+        all_path_errors = all(
+            isinstance(e.get("loc"), (list, tuple)) and e["loc"][0] == "path" for e in errors
+        )
+        http_status = 422 if all_path_errors else 400
+
         # Pydantic v2 errors can include non-serializable ctx values;
         # convert every error dict to string-safe form.
-        errors = []
-        for err in exc.errors():
+        clean_errors: list[dict[str, Any]] = []
+        for err in errors:
             clean: dict[str, Any] = {}
             for k, v in err.items():
                 if k == "ctx" and isinstance(v, dict):
                     clean[k] = {ck: str(cv) for ck, cv in v.items()}
                 else:
                     clean[k] = v
-            errors.append(clean)
+            clean_errors.append(clean)
         return JSONResponse(
-            status_code=400,
-            content={"detail": errors},
+            status_code=http_status,
+            content={"detail": clean_errors},
         )
 
     # ------------------------------------------------------------------
@@ -291,6 +453,107 @@ def build_app(
             ``bot_connected`` (bool) reflecting ``bot.is_ready()`` right now.
         """
         return {"status": "healthy", "bot_connected": bot.is_ready()}
+
+    # ------------------------------------------------------------------
+    # Member endpoints (Bearer-gated)
+    #
+    # Both endpoints are scoped to the single ``guild`` supplied to
+    # build_app().  See the module docstring for the multi-guild decision.
+    # ------------------------------------------------------------------
+
+    @app.get(
+        "/api/members",
+        dependencies=[Depends(_require_bearer)],
+    )
+    async def get_members() -> list[dict[str, str]]:
+        """Return the full guild member list.
+
+        Reads from the guild's local member cache (``guild.members``).  No
+        live Discord API call is made; the response is a best-effort snapshot
+        of the cached state at request time.
+
+        Each element has exactly three keys — ``id``, ``username``, and
+        ``display_name`` — matching the siege-web INTERFACE.md contract.
+        The Discord snowflake field is named ``id`` (not ``discord_id``);
+        this is load-bearing and must not be changed.
+
+        Returns:
+            A JSON array where each element is a dict with:
+            - ``id``: Discord snowflake (numeric string).
+            - ``username``: Discord username (``member.name``).
+            - ``display_name``: Guild display name
+              (``member.display_name``).
+        """
+        return [
+            {
+                "id": str(m.id),
+                "username": m.name,
+                "display_name": m.display_name,
+            }
+            for m in guild.members
+        ]
+
+    @app.get(
+        "/api/members/{discord_user_id}",
+        dependencies=[Depends(_require_bearer)],
+    )
+    async def get_member(
+        discord_user_id: str = FastAPIPath(..., pattern=r"^\d+$"),
+    ) -> dict[str, Any]:
+        """Look up a single guild member by Discord user ID.
+
+        Calls ``guild.fetch_member()`` (live Discord API call) to get the
+        most up-to-date membership status and role list.  If the user is not
+        in the guild, Discord raises ``discord.NotFound`` and the endpoint
+        returns 200 with ``is_member: false`` and all other fields ``null``.
+
+        The ``@everyone`` role is excluded from both ``roles`` and
+        ``role_names`` in the ``is_member: true`` case.
+
+        All six keys (``is_member``, ``discord_id``, ``username``,
+        ``display_name``, ``roles``, ``role_names``) are always present
+        regardless of membership status, per INTERFACE.md.
+
+        Args:
+            discord_user_id: Discord snowflake (numeric string only).
+                FastAPI validates against ``^\\d+$`` before the handler
+                runs — non-numeric values are rejected with 422.
+
+        Returns:
+            A dict with ``is_member: true`` and populated fields when the
+            user is in the guild, or ``is_member: false`` with all other
+            fields ``null`` when the user is not.
+
+        Raises:
+            HTTPException: 403 if Discord returns Forbidden (translated by
+                the global ``_handle_discord_forbidden`` handler).
+            HTTPException: 502 if Discord returns a 4xx error other than
+                Forbidden (translated by ``_handle_discord_http_exception``).
+            HTTPException: 503 if Discord returns a 5xx error or times out
+                (translated by the global exception handlers).
+        """
+        try:
+            member = await guild.fetch_member(int(discord_user_id))
+        except discord.NotFound:
+            return {
+                "is_member": False,
+                "discord_id": None,
+                "username": None,
+                "display_name": None,
+                "roles": None,
+                "role_names": None,
+            }
+        # discord.Forbidden, discord.HTTPException, and asyncio.TimeoutError
+        # are NOT caught here — the global exception handlers translate them
+        # to 403, 502, and 503 respectively per the error-envelope policy.
+        return {
+            "is_member": True,
+            "discord_id": str(member.id),
+            "username": member.name,
+            "display_name": member.display_name,
+            "roles": [str(r.id) for r in member.roles if r.name != "@everyone"],
+            "role_names": [r.name for r in member.roles if r.name != "@everyone"],
+        }
 
     # ------------------------------------------------------------------
     # Routes (Bearer-gated)
