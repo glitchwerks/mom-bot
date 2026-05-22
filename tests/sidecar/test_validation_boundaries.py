@@ -42,7 +42,6 @@ from unittest.mock import MagicMock
 import discord
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -137,17 +136,6 @@ def _auth(token: str = _VALID_TOKEN) -> dict[str, str]:
         Dict with Authorization header.
     """
     return {"Authorization": f"Bearer {token}"}
-
-
-# ---------------------------------------------------------------------------
-# Pydantic model for canary endpoint
-# ---------------------------------------------------------------------------
-
-
-class _CanaryBody(BaseModel):
-    """Minimal body model for the canary sidecar POST endpoint."""
-
-    required_field: str
 
 
 # ---------------------------------------------------------------------------
