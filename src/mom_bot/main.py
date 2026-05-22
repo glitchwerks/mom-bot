@@ -340,6 +340,7 @@ SiegeWebClient` instance registered via :func:`make_client`; stored so
         session_factory = _build_session_factory(_resolve_db_url())
         app = build_app(
             api_key=api_key,
+            bot=self,
             guild=guild,
             session_factory=session_factory,
         )
