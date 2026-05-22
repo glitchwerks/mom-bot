@@ -51,7 +51,7 @@ The app registration needs a service principal so Azure RBAC can target it.
 $SpObjectId = az ad sp create --id $AppId --query id --output tsv
 
 Write-Host "SpObjectId=$SpObjectId"
-# Save this — it is exported as $env:GHA_SP_OBJECT_ID in Step 5.
+# Save this — used in Step 4.5 grant commands.
 ```
 
 ---
@@ -323,17 +323,7 @@ Expected output confirms: role is `Role Based Access Control Administrator`, sco
 
 ## Step 5 — Deploy Bicep infrastructure
 
-The `$env:GHA_SP_OBJECT_ID` env var (exported in Step 4) is read by
-`infra/main.bicepparam` via `readEnvironmentVariable('GHA_SP_OBJECT_ID')`,
-supplying the SP object ID captured in Step 2. This satisfies Bicep's strict
-bicepparam contract (every declared param must have an assignment) without
-committing the value to the repo.
-
-The pre-flight guard catches the most common deploy failure mode: forgetting to re-export
-`GHA_SP_OBJECT_ID` after a `git pull` or in a fresh terminal session. Without it,
-`readEnvironmentVariable` returns the empty-string default, the KV role assignment receives
-an empty `principalId`, and Azure rejects the deploy 90 seconds in with `InvalidPrincipalId`.
-Failing at the pre-flight saves a few minutes of wasted deploy time.
+With the bootstrap grants from Step 4.5 in place, deploy the Bicep infrastructure:
 
 ```powershell
 az deployment sub create `
