@@ -10,6 +10,31 @@ Exposes the following endpoints:
 - ``GET /api/members/{discord_user_id}`` — Bearer-gated; returns a single
   guild member with an ``is_member`` discriminator.
 
+Validation-error status-code split (issue #187)
+-----------------------------------------------
+The sidecar endpoints and the role-sync ingestion endpoint have independent
+contracts for validation errors:
+
+- **Sidecar** (``/api/version``, ``/api/health``, ``/api/members``, etc.)
+  must return **422** for all validation errors (INTERFACE.md line 301).
+- **Role-sync ingestion** (``POST /api/internal/role-sync``) must return
+  **400** for body validation errors (role-sync contract spec § 5).
+
+This split is expressed via two FastAPI sub-apps, each with its own
+``RequestValidationError`` handler, mounted on a parent app:
+
+- ``_role_sync_sub`` — handles ``POST /role-sync``; registers a 400 handler;
+  mounted at ``/api/internal`` so the full path becomes
+  ``/api/internal/role-sync``.
+- ``_sidecar_sub`` — handles all other endpoints; registers a 422 handler;
+  mounted at ``/`` (root) so all ``/api/*`` paths except ``/api/internal``
+  reach it.
+
+The parent ``app`` mounts both sub-apps.  This avoids the fragile
+``loc[0]``-based path/body inspection that Phase 3 used, and ensures future
+sidecar endpoints (Phase 4+) automatically inherit 422 without any
+per-endpoint logic.
+
 ``/api/internal/role-sync`` decision tree (per contract spec § 6–7 and
 issue #65 AC):
 
@@ -241,6 +266,16 @@ def build_app(
     Supporting multiple guilds would require a contract change; file a new
     issue if that becomes necessary.
 
+    Validation-error split (issue #187):
+    Two FastAPI sub-apps are mounted on the parent ``app``:
+
+    - ``_sidecar_sub`` owns all non-role-sync endpoints; its
+      ``RequestValidationError`` handler returns **422**.
+    - ``_role_sync_sub`` owns ``POST /role-sync``; its handler returns **400**.
+
+    Both sub-apps are mounted on the parent ``app`` so the public paths
+    ``/api/*`` and ``/api/internal/role-sync`` remain unchanged.
+
     Args:
         api_key: Expected Bearer token value.  Requests whose
             ``Authorization`` header does not match are rejected with ``401``.
@@ -256,12 +291,88 @@ def build_app(
         A fully-configured :class:`fastapi.FastAPI` instance with all
         sidecar routes registered.
     """
+    # ------------------------------------------------------------------
+    # Two sub-apps: one per validation-error boundary (issue #187).
+    #
+    # _sidecar_sub  → all sidecar endpoints; validation errors → 422
+    # _role_sync_sub → role-sync ingestion;  validation errors → 400
+    #
+    # Each sub-app registers its own RequestValidationError handler so the
+    # decision is per-boundary, not per-request.  The parent ``app`` mounts
+    # both sub-apps and otherwise stays empty (no routes, no handlers of
+    # its own).
+    # ------------------------------------------------------------------
+
     app = FastAPI(title="mom-bot sidecar", docs_url=None, redoc_url=None)
+    _sidecar_sub = FastAPI(docs_url=None, redoc_url=None)
+    _role_sync_sub = FastAPI(docs_url=None, redoc_url=None)
 
     _require_bearer = make_bearer_dependency(api_key=api_key)
 
     # ------------------------------------------------------------------
-    # Discord exception → HTTP translation (global handlers).
+    # Helper: clean Pydantic v2 error dicts for JSON serialisation.
+    #
+    # Pydantic v2 may include non-JSON-serialisable objects (e.g.
+    # ``ValueError`` instances) in the ``ctx`` key.  Both validation
+    # handlers use this helper so the logic lives in one place.
+    # ------------------------------------------------------------------
+
+    def _clean_validation_errors(
+        exc: RequestValidationError,
+    ) -> list[dict[str, Any]]:
+        """Return a JSON-serialisable copy of ``exc.errors()``.
+
+        Args:
+            exc: The :class:`~fastapi.exceptions.RequestValidationError`
+                raised by Pydantic.
+
+        Returns:
+            A list of error dicts with non-serialisable ``ctx`` values
+            converted to strings.
+        """
+        clean_errors: list[dict[str, Any]] = []
+        for err in exc.errors():
+            clean: dict[str, Any] = {}
+            for k, v in err.items():
+                if k == "ctx" and isinstance(v, dict):
+                    clean[k] = {ck: str(cv) for ck, cv in v.items()}
+                else:
+                    clean[k] = v
+            clean_errors.append(clean)
+        return clean_errors
+
+    # ------------------------------------------------------------------
+    # Sidecar sub-app — validation handler: ALL errors → 422
+    #
+    # INTERFACE.md line 301: "422 | Missing required field, wrong type,
+    # or malformed JSON".  There is no loc[0]-based split here — sidecar
+    # endpoints return 422 for path, body, and query validation alike.
+    # ------------------------------------------------------------------
+
+    @_sidecar_sub.exception_handler(RequestValidationError)
+    async def _sidecar_validation_error_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        """Convert Pydantic validation errors to 422 for sidecar endpoints.
+
+        The sidecar contract (INTERFACE.md line 301) requires 422 for all
+        validation errors — body, query, and path errors alike.
+
+        Args:
+            request: The incoming HTTP request.
+            exc: The validation exception raised by Pydantic.
+
+        Returns:
+            A 422 JSON response with the validation detail list.
+        """
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": _clean_validation_errors(exc)},
+        )
+
+    # ------------------------------------------------------------------
+    # Sidecar sub-app — Discord exception → HTTP translation.
     #
     # Registered per the error-semantics in INTERFACE.md § Error semantics:
     #   discord.Forbidden (403 from Discord)   → HTTP 403
@@ -276,7 +387,7 @@ def build_app(
     # business logic (200 with is_member=false), not error translation.
     # ------------------------------------------------------------------
 
-    @app.exception_handler(discord.Forbidden)
+    @_sidecar_sub.exception_handler(discord.Forbidden)
     async def _handle_discord_forbidden(
         _request: Request,
         exc: discord.Forbidden,
@@ -300,7 +411,7 @@ def build_app(
             content={"detail": "Discord permission denied"},
         )
 
-    @app.exception_handler(discord.HTTPException)
+    @_sidecar_sub.exception_handler(discord.HTTPException)
     async def _handle_discord_http_exception(
         _request: Request,
         exc: discord.HTTPException,
@@ -335,7 +446,7 @@ def build_app(
             content={"detail": "Discord temporarily unavailable"},
         )
 
-    @app.exception_handler(asyncio.TimeoutError)
+    @_sidecar_sub.exception_handler(asyncio.TimeoutError)
     async def _handle_timeout(
         _request: Request,
         exc: asyncio.TimeoutError,
@@ -358,65 +469,41 @@ def build_app(
         )
 
     # ------------------------------------------------------------------
-    # Override FastAPI's default 422 validation error → return 400 instead.
-    # The contract specifies 400 for invalid schema, not 422.
+    # Role-sync sub-app — validation handler: body errors → 400
+    #
+    # The role-sync ingestion contract (spec § 5) requires 400 for body
+    # validation failures.  This handler is scoped to _role_sync_sub so
+    # it cannot affect sidecar endpoints.
     # ------------------------------------------------------------------
 
-    @app.exception_handler(RequestValidationError)
-    async def _validation_error_handler(
+    @_role_sync_sub.exception_handler(RequestValidationError)
+    async def _role_sync_validation_error_handler(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        """Convert Pydantic validation errors to 400 or 422.
+        """Convert Pydantic validation errors to 400 for the role-sync endpoint.
 
-        Request body and query-parameter validation errors are returned as
-        ``400 Bad Request`` per the role-sync contract spec.  Path-parameter
-        validation errors (``loc[0] == "path"``) are returned as
-        ``422 Unprocessable Entity`` per the members endpoint contract
-        (INTERFACE.md § ``GET /api/members/{discord_user_id}``).
-
-        Pydantic v2's ``exc.errors()`` may include non-JSON-serializable
-        objects (e.g. ``ValueError`` instances in the ``ctx`` key).  We
-        serialise them to strings before building the response body.
+        The role-sync ingestion contract requires 400 for body validation
+        failures (contract spec § 5).  This handler is registered only on
+        the role-sync sub-app so it cannot propagate to sidecar endpoints.
 
         Args:
             request: The incoming HTTP request.
             exc: The validation exception raised by Pydantic.
 
         Returns:
-            A 400 or 422 JSON response with the validation detail.
+            A 400 JSON response with the validation detail list.
         """
-        errors = exc.errors()
-
-        # If every error originates from a path parameter, return 422 so
-        # that path-validation on /api/members/{discord_user_id} conforms
-        # to INTERFACE.md.  Body/query errors retain 400 (role-sync spec).
-        all_path_errors = all(
-            isinstance(e.get("loc"), (list, tuple)) and e["loc"][0] == "path" for e in errors
-        )
-        http_status = 422 if all_path_errors else 400
-
-        # Pydantic v2 errors can include non-serializable ctx values;
-        # convert every error dict to string-safe form.
-        clean_errors: list[dict[str, Any]] = []
-        for err in errors:
-            clean: dict[str, Any] = {}
-            for k, v in err.items():
-                if k == "ctx" and isinstance(v, dict):
-                    clean[k] = {ck: str(cv) for ck, cv in v.items()}
-                else:
-                    clean[k] = v
-            clean_errors.append(clean)
         return JSONResponse(
-            status_code=http_status,
-            content={"detail": clean_errors},
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": _clean_validation_errors(exc)},
         )
 
     # ------------------------------------------------------------------
-    # Public endpoints (no auth)
+    # Sidecar sub-app: public endpoints (no auth)
     # ------------------------------------------------------------------
 
-    @app.get("/api/version")
+    @_sidecar_sub.get("/api/version")
     async def version() -> dict[str, str]:
         """Return the sidecar version string.
 
@@ -439,7 +526,7 @@ def build_app(
             ver = semver
         return {"version": ver}
 
-    @app.get("/api/health")
+    @_sidecar_sub.get("/api/health")
     async def health() -> dict[str, object]:
         """Return bot connectivity status.
 
@@ -455,13 +542,14 @@ def build_app(
         return {"status": "healthy", "bot_connected": bot.is_ready()}
 
     # ------------------------------------------------------------------
-    # Member endpoints (Bearer-gated)
+    # Sidecar sub-app: Member endpoints (Bearer-gated)
+    # ------------------------------------------------------------------
     #
     # Both endpoints are scoped to the single ``guild`` supplied to
     # build_app().  See the module docstring for the multi-guild decision.
     # ------------------------------------------------------------------
 
-    @app.get(
+    @_sidecar_sub.get(
         "/api/members",
         dependencies=[Depends(_require_bearer)],
     )
@@ -493,7 +581,7 @@ def build_app(
             for m in guild.members
         ]
 
-    @app.get(
+    @_sidecar_sub.get(
         "/api/members/{discord_user_id}",
         dependencies=[Depends(_require_bearer)],
     )
@@ -526,11 +614,11 @@ def build_app(
 
         Raises:
             HTTPException: 403 if Discord returns Forbidden (translated by
-                the global ``_handle_discord_forbidden`` handler).
+                the ``_handle_discord_forbidden`` handler on _sidecar_sub).
             HTTPException: 502 if Discord returns a 4xx error other than
                 Forbidden (translated by ``_handle_discord_http_exception``).
             HTTPException: 503 if Discord returns a 5xx error or times out
-                (translated by the global exception handlers).
+                (translated by the exception handlers on _sidecar_sub).
         """
         try:
             member = await guild.fetch_member(int(discord_user_id))
@@ -544,7 +632,7 @@ def build_app(
                 "role_names": None,
             }
         # discord.Forbidden, discord.HTTPException, and asyncio.TimeoutError
-        # are NOT caught here — the global exception handlers translate them
+        # are NOT caught here — the handlers on _sidecar_sub translate them
         # to 403, 502, and 503 respectively per the error-envelope policy.
         return {
             "is_member": True,
@@ -556,11 +644,15 @@ def build_app(
         }
 
     # ------------------------------------------------------------------
-    # Routes (Bearer-gated)
+    # Role-sync sub-app: role-sync ingestion endpoint (Bearer-gated)
+    #
+    # The route is ``POST /role-sync`` on the sub-app; the parent app
+    # mounts this sub-app at ``/api/internal`` so the public path is
+    # ``POST /api/internal/role-sync``.
     # ------------------------------------------------------------------
 
-    @app.post(
-        "/api/internal/role-sync",
+    @_role_sync_sub.post(
+        "/role-sync",
         response_model=RoleSyncResponse,
         dependencies=[Depends(_require_bearer)],
     )
@@ -722,5 +814,22 @@ def build_app(
             removed=result.removed,
             reason=result.reason,
         )
+
+    # ------------------------------------------------------------------
+    # Mount sub-apps on the parent app.
+    #
+    # _role_sync_sub is mounted at /api/internal so that:
+    #   POST /api/internal/role-sync → _role_sync_sub POST /role-sync
+    #
+    # _sidecar_sub is mounted at / (root) so that all other /api/* paths
+    # are handled by the sidecar sub-app with its 422 validation handler.
+    #
+    # Mount order matters: Starlette tries mounts in registration order
+    # and stops at the first prefix match.  /api/internal is more specific
+    # than /, so _role_sync_sub must be mounted first.
+    # ------------------------------------------------------------------
+
+    app.mount("/api/internal", _role_sync_sub)
+    app.mount("/", _sidecar_sub)
 
     return app
