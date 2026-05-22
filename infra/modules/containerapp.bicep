@@ -30,9 +30,15 @@
 //   See #81 for the diagnosis. AZURE_CLIENT_ID is sourced from
 //   mi-mom-bot.clientId and is required by ManagedIdentityCredential; the
 //   ACA IMDS endpoint does not auto-select the sole UserAssigned identity.
-// - Single replica (scale 0-1) — SQLite + WAL requires single writer.
-//   Policy 1 (issue #87): @allowed([1]) on maxReplicas makes the constraint
-//   load-bearing at Bicep build time.
+// - Always-on single replica (minReplicas: 1, maxReplicas: 1). The two bounds
+//   solve different problems and must not be conflated:
+//   - maxReplicas: 1 enforces single-writer for SQLite + WAL (Policy 1, issue #87).
+//     @allowed([1]) on maxReplicas makes this constraint load-bearing at Bicep build time.
+//   - minReplicas: 1 keeps the Discord gateway WebSocket alive and the reminder
+//     scheduler ticking — a Discord bot can't scale to zero. Without this, a new
+//     revision provisions Healthy but never starts a replica, and the bot silently
+//     goes offline (see issue #181).
+//   Do not lower minReplicas to 0 to "save cost"; the bot stops working.
 // - CAE storage binding lives here (not in storage.bicep) because the binding
 //   is a child of the CAE. Co-locating them gives Bicep a symbol reference
 //   (storageBinding.name) so the container app's volumes[] depends on the
@@ -172,7 +178,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
     }
     template: {
       scale: {
-        minReplicas: 0
+        minReplicas: 1
         maxReplicas: maxReplicas
       }
       volumes: [
