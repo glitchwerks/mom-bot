@@ -39,10 +39,12 @@ These apply to every endpoint and every test file in this plan:
 - **Bearer auth.** Use the existing `_require_bearer` dependency from `src/mom_bot/sidecar/auth.py` (introduced in Phase 2, PR #184). Do not roll new auth.
 - **Missing-header response is `403`, not `401`.** This is asserted by `siege-web/backend/tests/integration/sidecar/test_auth.py:29-134` across all four endpoints. The `HTTPBearer(auto_error=True)` scaffold from Phase 2 already produces 403; do not regress.
 - **`@everyone` is excluded** from any `roles` / `role_names` list returned by the sidecar — established in Phase 3.
-- **Discord-exception translation** must follow `siege-web/bot/INTERFACE.md` error-semantics table (lines 180–194). Specifically:
-  - `discord.NotFound` on a target resource → endpoint-specific business semantics (200 + a "not found" discriminator on read paths like `/api/members/{id}`; 404 on write paths where the resource is required to exist).
-  - `discord.Forbidden` → 502 with a structured error body.
-  - `discord.HTTPException` (5xx upstream) → 502 with a structured error body.
+- **Discord-exception translation** — `INTERFACE.md` Quick-Start § "Translate Discord errors to HTTP status codes" + § "Error semantics" is the authoritative mapping. As of plan-write time it reads:
+  - `discord.Forbidden` → **403**
+  - Discord **4xx** (other than Forbidden) → **502**
+  - Discord **5xx** or **timeout** → **503**
+  - `discord.NotFound` semantics are endpoint-specific (read paths use 200 + business discriminator per Phase 3 precedent; write paths use 404 when the target is required to exist) — confirm against INTERFACE.md's endpoint-specific table and siege-web's tests.
+  - **Always re-verify against INTERFACE.md + `siege-web/backend/tests/integration/sidecar/` at implementation time** — tests win if they disagree with prose.
 - **Multi-guild scope.** Endpoints query only the guild bound to `build_app(guild=...)` — provisional option (a) decision documented in the `app.py` module docstring (Phase 3).
 - **Request validation.** `RequestValidationError` handler splits 422 (path errors) vs 400 (body/query errors) by inspecting `err["loc"][0]` — established Phase 3, do not regress.
 - **Conformance gates.** Where siege-web's integration test under `siege-web/backend/tests/integration/sidecar/` exists for the endpoint, port it as a unit test against the FastAPI `TestClient` and ensure parity on status codes, error shapes, and response keys.
@@ -89,10 +91,12 @@ State the expected pre-implementation test count in the implementer brief (captu
 - Auth: Bearer (existing `_require_bearer` dependency)
 - Request body: `{"username": str, "message": str}` (confirm shape against siege-web's caller and INTERFACE.md — if INTERFACE.md says `discord_id` instead of `username`, follow INTERFACE.md).
 - Resolution: look up the guild member by username in the guild bound at startup; DM them with `message`.
-- Success: 200 with the JSON shape INTERFACE.md prescribes.
-- `discord.NotFound` (no such member) → 404 with structured error body.
-- `discord.Forbidden` (DMs closed, blocked, etc.) → 502 with structured error body.
-- `discord.HTTPException` 5xx → 502.
+- Request body confirmed from INTERFACE.md § "POST /api/notify": `{"username": "SomeMember", "message": "Your siege assignment is ready."}`.
+- Success: 200 with the JSON shape INTERFACE.md prescribes (verify at impl time).
+- `discord.NotFound` (no such member by username) → 404 with structured error body (write-path semantics).
+- `discord.Forbidden` (DMs closed / blocked / no shared guild) → **403** per § Error semantics.
+- Discord **4xx** (non-Forbidden) → **502**.
+- Discord **5xx** or **timeout** → **503**.
 
 **Files touched:**
 
