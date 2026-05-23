@@ -152,6 +152,11 @@ _PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any]]] = [
         "/api/notify",
         {"username": "some-user", "message": "test message"},
     ),
+    (
+        "POST",
+        "/api/post-message",
+        {"channel_name": "some-channel", "message": "test message"},
+    ),
 ]
 
 
@@ -163,6 +168,7 @@ _PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any]]] = [
         "GET /api/members/{id}",
         "POST /api/internal/role-sync",
         "POST /api/notify",
+        "POST /api/post-message",
     ],
 )
 def test_missing_auth_header_returns_403(
@@ -201,6 +207,7 @@ def test_missing_auth_header_returns_403(
         "GET /api/members/{id}",
         "POST /api/internal/role-sync",
         "POST /api/notify",
+        "POST /api/post-message",
     ],
 )
 def test_missing_auth_header_body_has_detail(
