@@ -13,6 +13,10 @@ Exposes the following endpoints:
   Discord username.
 - ``POST /api/post-message`` — Bearer-gated; posts a text message to a
   guild channel by exact channel name.
+- ``POST /api/post-image`` — Bearer-gated; accepts a multipart upload
+  (``channel_name`` form field + ``file`` binary part), posts the image
+  to the named guild channel via ``discord.File``, and returns the
+  Discord CDN URL of the uploaded attachment.
 
 Validation-error status-code split (issue #187)
 -----------------------------------------------
@@ -111,11 +115,12 @@ import asyncio
 import json
 import logging
 import os
+from io import BufferedIOBase
 from typing import Any, Literal, cast
 from weakref import WeakValueDictionary
 
 import discord
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -305,6 +310,14 @@ def build_app(
       ``{"status": "sent"}`` on success, 404 when the channel name is not
       found, and translates Discord exceptions via the sidecar sub-app
       handlers (Forbidden → 403, 4xx → 502, 5xx/timeout → 503).
+    - ``POST /api/post-image`` — Bearer-gated; accepts a multipart body
+      with ``channel_name`` (form field) and ``file`` (binary UploadFile).
+      Resolves the channel by exact name match against ``guild.channels``,
+      then streams the upload to Discord via
+      ``discord.File(fp=upload.file, filename=...)``.  Returns
+      ``{"status": "sent", "url": "<discord-cdn-url>"}`` on success.
+      Returns 404 when the channel name is not found; translates Discord
+      exceptions the same way as ``/api/post-message``.
 
     Multi-guild decision (issue #177):
     Both member endpoints are scoped to the single ``guild`` supplied here.
@@ -805,6 +818,96 @@ def build_app(
         channel = cast(discord.abc.Messageable, raw_channel)
         await channel.send(body.message)
         return {"status": "sent"}
+
+    # ------------------------------------------------------------------
+    # Sidecar sub-app: Post-image endpoint (Bearer-gated)
+    #
+    # Accepts a multipart body: ``channel_name`` (Form field, required)
+    # and ``file`` (UploadFile, required binary part).  Resolves the
+    # channel by exact name match against guild.channels (first match,
+    # same as post-message), then sends the image via
+    # ``discord.File(fp=upload.file, filename=upload.filename)``.
+    #
+    # Streaming: ``upload.file`` is the underlying SpooledTemporaryFile
+    # provided by Starlette.  Passing it directly to ``discord.File``
+    # avoids buffering the whole upload in memory.  The endpoint must
+    # NOT call ``await upload.read()`` before passing to discord.File.
+    #
+    # Response: ``{"status": "sent", "url": "<discord-cdn-url>"}`` where
+    # ``url`` is ``message.attachments[0].url`` of the returned Message.
+    #
+    # Error semantics mirror post-message:
+    #   channel not found (name resolution) → 404
+    #   discord.Forbidden (send-time) → 403
+    #   discord 4xx non-Forbidden → 502
+    #   discord 5xx / timeout → 503
+    # ------------------------------------------------------------------
+
+    @_sidecar_sub.post(
+        "/api/post-image",
+        dependencies=[Depends(_require_bearer)],
+    )
+    async def post_image(
+        channel_name: str = Form(...),
+        file: UploadFile = File(...),  # noqa: B008
+    ) -> dict[str, str]:
+        """Post an image to a guild channel and return its Discord CDN URL.
+
+        Resolves the channel by an exact match of ``channel_name`` against
+        ``.name`` on each entry in ``guild.channels``.  The first matching
+        channel is used; if none is found, raises 404 before any Discord
+        API call is attempted.
+
+        On a match, streams the upload to Discord via
+        ``discord.File(fp=file.file, filename=file.filename or "image.png")``.
+        The ``file.file`` attribute is the underlying SpooledTemporaryFile
+        provided by Starlette — passing it directly avoids a full-memory
+        read.
+
+        Any ``discord.Forbidden``, ``discord.HTTPException``, or
+        ``asyncio.TimeoutError`` raised during the send is caught by the
+        exception handlers registered on ``_sidecar_sub`` and translated
+        to the appropriate HTTP status code (403 / 502 / 503).
+
+        Args:
+            channel_name: Discord channel name (exact match, without ``#``
+                prefix).  Must be supplied as a multipart form field, not
+                as a query parameter.
+            file: The image to post.  Must be supplied as a binary
+                multipart part named ``file``.
+
+        Returns:
+            ``{"status": "sent", "url": "<cdn-url>"}`` on successful
+            image delivery, where ``url`` is the Discord CDN link of the
+            posted attachment.
+
+        Raises:
+            HTTPException: 404 if no channel in ``guild.channels`` has a
+                ``.name`` exactly matching ``channel_name``.  Raised
+                before any Discord API call is made.
+        """
+        raw_channel = next(
+            (c for c in guild.channels if c.name == channel_name),
+            None,
+        )
+        if raw_channel is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Channel not found in guild",
+            )
+        # Cast to Messageable so mypy knows .send() is available.
+        channel = cast(discord.abc.Messageable, raw_channel)
+        # file.file is a SpooledTemporaryFile (BinaryIO per Starlette's
+        # type stubs), but discord.File expects BufferedIOBase.  At runtime
+        # SpooledTemporaryFile is buffered-IO-compatible; we cast to satisfy
+        # mypy without copying bytes into memory.
+        discord_file = discord.File(
+            fp=cast(BufferedIOBase, file.file),
+            filename=file.filename or "image.png",
+        )
+        message = await channel.send(file=discord_file)
+        cdn_url: str = message.attachments[0].url
+        return {"status": "sent", "url": cdn_url}
 
     # ------------------------------------------------------------------
     # Role-sync sub-app: role-sync ingestion endpoint (Bearer-gated)

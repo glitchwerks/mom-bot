@@ -3,7 +3,7 @@ Bearer-protected endpoints.
 
 Mirrors ``siege-web/backend/tests/integration/sidecar/test_auth.py:29-134``
 which asserts ``response.status_code == 403`` for missing-header across all
-four protected endpoints.
+five protected endpoints (Phases 1–6).
 
 Issue: glitchwerks/mom-bot#186
 Contract source: siege-web/backend/tests/integration/sidecar/test_auth.py
@@ -61,11 +61,13 @@ class _FakeGuild:
 
     Attributes:
         members: Empty member list.
+        channels: Empty channel list (post-image uses guild.channels).
     """
 
     def __init__(self) -> None:
-        """Initialise with an empty member list."""
+        """Initialise with empty member and channel lists."""
         self.members: list[Any] = []
+        self.channels: list[Any] = []
 
     async def fetch_member(self, user_id: int) -> None:
         """Raise discord.NotFound for any ID.
@@ -229,6 +231,64 @@ def test_missing_auth_header_body_has_detail(
         response = client.post(path, json=body)
     data = response.json()
     assert "detail" in data, f"{method} {path} 403 body must have 'detail' key; got: {data!r}"
+    assert isinstance(
+        data["detail"], str
+    ), f"'detail' must be a string; got: {type(data['detail'])!r}"
+
+
+# ---------------------------------------------------------------------------
+# POST /api/post-image — missing-header regression (standalone, multipart)
+#
+# /api/post-image uses multipart form data, not JSON, so it cannot be included
+# in the parametrized block above (which sends JSON bodies via ``json=``).
+# A missing Authorization header must still produce 403 per the contract.
+# ---------------------------------------------------------------------------
+
+# Minimal 1×1 white PNG reused from test_post_image.py for multipart requests.
+_MINIMAL_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00"
+    b"\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18"
+    b"\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
+
+def test_post_image_missing_auth_header_returns_403() -> None:
+    """POST /api/post-image with no Authorization header returns 403.
+
+    Uses a valid multipart body so the auth check (not form validation)
+    is the only failure point.  Mirrors the parametrized suite above for
+    the other five protected endpoints.
+
+    Mirrors siege-web/backend/tests/integration/sidecar/test_auth.py.
+    """
+    client = _make_client()
+    response = client.post(
+        "/api/post-image",
+        files={"file": ("test.png", _MINIMAL_PNG, "image/png")},
+        data={"channel_name": "any-channel"},
+        # No Authorization header — deliberate.
+    )
+    assert response.status_code == 403, (
+        "POST /api/post-image without Authorization header must return 403; "
+        f"got {response.status_code}"
+    )
+
+
+def test_post_image_missing_auth_header_body_has_detail() -> None:
+    """POST /api/post-image 403 for missing header must contain 'detail' str.
+
+    Mirrors the parametrized ``test_missing_auth_header_body_has_detail``
+    for the other five protected endpoints.
+    """
+    client = _make_client()
+    response = client.post(
+        "/api/post-image",
+        files={"file": ("test.png", _MINIMAL_PNG, "image/png")},
+        data={"channel_name": "any-channel"},
+    )
+    data = response.json()
+    assert "detail" in data, f"POST /api/post-image 403 body must have 'detail' key; got: {data!r}"
     assert isinstance(
         data["detail"], str
     ), f"'detail' must be a string; got: {type(data['detail'])!r}"
