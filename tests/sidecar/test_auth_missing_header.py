@@ -147,6 +147,11 @@ _PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any]]] = [
             "correlation_id": "test-corr-id",
         },
     ),
+    (
+        "POST",
+        "/api/notify",
+        {"username": "some-user", "message": "test message"},
+    ),
 ]
 
 
@@ -157,6 +162,7 @@ _PROTECTED_ENDPOINTS: list[tuple[str, str, dict[str, Any]]] = [
         "GET /api/members",
         "GET /api/members/{id}",
         "POST /api/internal/role-sync",
+        "POST /api/notify",
     ],
 )
 def test_missing_auth_header_returns_403(
@@ -194,6 +200,7 @@ def test_missing_auth_header_returns_403(
         "GET /api/members",
         "GET /api/members/{id}",
         "POST /api/internal/role-sync",
+        "POST /api/notify",
     ],
 )
 def test_missing_auth_header_body_has_detail(

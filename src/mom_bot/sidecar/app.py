@@ -9,6 +9,8 @@ Exposes the following endpoints:
 - ``GET /api/members`` — Bearer-gated; returns the full guild member list.
 - ``GET /api/members/{discord_user_id}`` — Bearer-gated; returns a single
   guild member with an ``is_member`` discriminator.
+- ``POST /api/notify`` — Bearer-gated; sends a DM to a guild member by
+  Discord username.
 
 Validation-error status-code split (issue #187)
 -----------------------------------------------
@@ -111,7 +113,7 @@ from typing import Any, Literal
 from weakref import WeakValueDictionary
 
 import discord
-from fastapi import Depends, FastAPI, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -221,6 +223,20 @@ class RoleSyncResponse(BaseModel):
     last_assigned_at: str | None = None
 
 
+class NotifyRequest(BaseModel):
+    """Inbound payload for ``POST /api/notify`` (INTERFACE.md § POST /api/notify).
+
+    Attributes:
+        username: Discord username of the target member (``member.name``
+            — not the display name).  Matched case-insensitively against
+            the guild member cache.
+        message: DM content to deliver.
+    """
+
+    username: str
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -259,6 +275,12 @@ def build_app(
       ``{"is_member": false, "discord_id": null, ...}`` when the user is
       not in the guild.  The ``@everyone`` role is excluded from ``roles``
       and ``role_names``.
+    - ``POST /api/notify`` — Bearer-gated; looks up a guild member by
+      ``username`` (case-insensitive match against ``member.name`` in the
+      cached guild roster) and sends a DM via ``await member.send()``.
+      Returns ``{"status": "sent"}`` on success, 404 when the username is
+      not found, and translates ``discord.Forbidden`` / ``HTTPException`` /
+      ``asyncio.TimeoutError`` via the sidecar sub-app exception handlers.
 
     Multi-guild decision (issue #177):
     Both member endpoints are scoped to the single ``guild`` supplied here.
@@ -642,6 +664,59 @@ def build_app(
             "roles": [str(r.id) for r in member.roles if r.name != "@everyone"],
             "role_names": [r.name for r in member.roles if r.name != "@everyone"],
         }
+
+    # ------------------------------------------------------------------
+    # Sidecar sub-app: Notify endpoint (Bearer-gated)
+    #
+    # Looks up the target member by username in the guild member cache
+    # (case-insensitive) and sends a DM via ``await member.send()``.
+    # Discord exceptions (Forbidden, HTTPException, TimeoutError) are
+    # translated by the exception handlers registered on _sidecar_sub
+    # above — no per-endpoint try/except needed.
+    # ------------------------------------------------------------------
+
+    @_sidecar_sub.post(
+        "/api/notify",
+        dependencies=[Depends(_require_bearer)],
+    )
+    async def notify(body: NotifyRequest) -> dict[str, str]:
+        """Send a DM to a guild member by Discord username.
+
+        Resolves the member by an exact case-insensitive match of
+        ``body.username`` against ``member.name`` in the guild's locally
+        cached member roster.  If no match is found, raises 404 before
+        any Discord API call is attempted.
+
+        On a match, calls ``await member.send(body.message)``.  Any
+        ``discord.Forbidden``, ``discord.HTTPException``, or
+        ``asyncio.TimeoutError`` raised during the send is caught by the
+        exception handlers registered on ``_sidecar_sub`` and translated
+        to the appropriate HTTP status code (403 / 502 / 503).
+
+        Args:
+            body: Validated request payload with ``username`` and
+                ``message`` fields.
+
+        Returns:
+            ``{"status": "sent"}`` on successful DM delivery.
+
+        Raises:
+            HTTPException: 404 if no guild member's ``name`` matches
+                ``body.username`` (case-insensitive).  Raised before any
+                Discord API call is made.
+        """
+        username_lower = body.username.lower()
+        member = next(
+            (m for m in guild.members if m.name.lower() == username_lower),
+            None,
+        )
+        if member is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Member not found in guild cache",
+            )
+        await member.send(body.message)
+        return {"status": "sent"}
 
     # ------------------------------------------------------------------
     # Role-sync sub-app: role-sync ingestion endpoint (Bearer-gated)
