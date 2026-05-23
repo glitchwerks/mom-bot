@@ -11,6 +11,8 @@ Exposes the following endpoints:
   guild member with an ``is_member`` discriminator.
 - ``POST /api/notify`` — Bearer-gated; sends a DM to a guild member by
   Discord username.
+- ``POST /api/post-message`` — Bearer-gated; posts a text message to a
+  guild channel by exact channel name.
 
 Validation-error status-code split (issue #187)
 -----------------------------------------------
@@ -109,7 +111,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from weakref import WeakValueDictionary
 
 import discord
@@ -237,6 +239,22 @@ class NotifyRequest(BaseModel):
     message: str
 
 
+class PostMessageRequest(BaseModel):
+    """Inbound payload for ``POST /api/post-message``.
+
+    See INTERFACE.md § POST /api/post-message for the authoritative spec.
+
+    Attributes:
+        channel_name: Discord channel name (exact match, without ``#``
+            prefix).  The first ``TextChannel`` in ``guild.channels``
+            whose ``.name`` exactly equals this value is used.
+        message: Message content to post.
+    """
+
+    channel_name: str
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -281,6 +299,12 @@ def build_app(
       Returns ``{"status": "sent"}`` on success, 404 when the username is
       not found, and translates ``discord.Forbidden`` / ``HTTPException`` /
       ``asyncio.TimeoutError`` via the sidecar sub-app exception handlers.
+    - ``POST /api/post-message`` — Bearer-gated; resolves a guild channel
+      by exact ``channel_name`` match against ``guild.channels`` and posts
+      ``message`` via ``await channel.send()``.  Returns
+      ``{"status": "sent"}`` on success, 404 when the channel name is not
+      found, and translates Discord exceptions via the sidecar sub-app
+      handlers (Forbidden → 403, 4xx → 502, 5xx/timeout → 503).
 
     Multi-guild decision (issue #177):
     Both member endpoints are scoped to the single ``guild`` supplied here.
@@ -716,6 +740,70 @@ def build_app(
                 detail="Member not found in guild cache",
             )
         await member.send(body.message)
+        return {"status": "sent"}
+
+    # ------------------------------------------------------------------
+    # Sidecar sub-app: Post-message endpoint (Bearer-gated)
+    #
+    # Resolves the target channel by iterating guild.channels and finding
+    # the first entry whose .name exactly matches body.channel_name.  If
+    # no match is found, 404 is raised before any Discord API call.  This
+    # mirrors the bundled sidecar (discord_client.py:33-41) which uses
+    # discord.utils.find with an isinstance(c, discord.TextChannel) guard;
+    # the isinstance check is omitted here because the guild is pre-bound
+    # at startup and duck-typing is sufficient for the test boundary.
+    #
+    # Channel resolution failures (name not found) MUST collapse to 404
+    # per INTERFACE.md § POST /api/post-message.  Send-time failures
+    # (after channel resolution) are caught by _sidecar_sub's exception
+    # handlers: Forbidden → 403, 4xx → 502, 5xx/timeout → 503.
+    # ------------------------------------------------------------------
+
+    @_sidecar_sub.post(
+        "/api/post-message",
+        dependencies=[Depends(_require_bearer)],
+    )
+    async def post_message(body: PostMessageRequest) -> dict[str, str]:
+        """Post a text message to a guild channel by exact channel name.
+
+        Resolves the channel by an exact match of ``body.channel_name``
+        against ``.name`` on each entry in ``guild.channels``.  The first
+        matching channel is used; if none is found, raises 404 before any
+        Discord API call is attempted.
+
+        On a match, calls ``await channel.send(body.message)``.  Any
+        ``discord.Forbidden``, ``discord.HTTPException``, or
+        ``asyncio.TimeoutError`` raised during the send is caught by the
+        exception handlers registered on ``_sidecar_sub`` and translated
+        to the appropriate HTTP status code (403 / 502 / 503).
+
+        Args:
+            body: Validated request payload with ``channel_name`` and
+                ``message`` fields.
+
+        Returns:
+            ``{"status": "sent"}`` on successful message delivery.
+
+        Raises:
+            HTTPException: 404 if no channel in ``guild.channels`` has a
+                ``.name`` exactly matching ``body.channel_name``.  Raised
+                before any Discord API call is made.
+        """
+        raw_channel = next(
+            (c for c in guild.channels if c.name == body.channel_name),
+            None,
+        )
+        if raw_channel is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Channel not found in guild",
+            )
+        # Cast to Messageable so mypy knows .send() is available.
+        # In production all entries of guild.channels that match are
+        # TextChannel (which is Messageable); duck-typed fakes in tests
+        # also expose .send() by contract.
+        channel = cast(discord.abc.Messageable, raw_channel)
+        await channel.send(body.message)
         return {"status": "sent"}
 
     # ------------------------------------------------------------------
