@@ -145,7 +145,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
       // External public HTTPS ingress — enabled for sidecar API (Epic #128 Phase 1, issue #76 A4).
       // Container Apps auto-provisions TLS when external=true; transport: 'http' is correct here
       // (the platform does TLS termination at the edge — specifying 'https' is wrong for this field).
-      // IP allowlist restricts inbound to siege-web prod CAE static egress only (D-2).
+      // IP allowlist restricts inbound to siege-web prod + dev CAE static egress IPs (D-2; mom-bot#76).
       // Policy 1 reinforcement (issue #87): no rolling overlap — old replica drains before new one starts.
       ingress: {
         external: true
@@ -158,6 +158,12 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
             ipAddressRange: '20.245.166.6/32'
             action: 'Allow'
             description: 'siege-web prod Container Apps Environment static outbound IP (Epic #128 D-2)'
+          }
+          {
+            name: 'siege-web-dev-cae-egress'
+            ipAddressRange: '57.154.169.204/32'
+            action: 'Allow'
+            description: 'siege-web-api-dev Container Apps Environment static outbound IP (coord rsl-mom-apps#9, mom-bot#76)'
           }
         ]
         traffic: [
