@@ -60,7 +60,18 @@ issue #65 AC):
       without invoking; do NOT update stored row.
 
    c. **Fresh write** (no row, or incoming ``assigned_at`` ≥ stored) →
-      invoke the role service, UPSERT the row, return the result.
+      resolve the effective ``day_number`` (see below), invoke the role
+      service, UPSERT the row, return the result.
+
+4. **Unassign day_number resolution** (issue #204): siege-web sends
+   ``day_number=null`` for unassign per contract (§ 2).  On the fresh-write
+   path the handler resolves the actual day to remove from the stored state:
+
+   - No prior state row → return
+     ``{status:"skipped", reason:"already_lacks_role"}`` without calling
+     the service.
+   - Prior state row with ``last_day_number=N`` → pass ``day_number=N`` to
+     the role service so it can look up and remove the correct Discord role.
 
 All role-service outcomes (``applied``, ``partial``, ``skipped``, ``failed``)
 are returned as ``200`` with a structured JSON body.  A ``failed`` result is
@@ -925,18 +936,25 @@ def build_app(
     async def role_sync(body: RoleSyncRequest) -> Any:
         """Handle a day-role-sync webhook from siege-web.
 
-        Implements the full decision tree from the wire contract (§ 6–7)
-        and issue #65 AC.  The entire idempotency-check → service call →
-        UPSERT sequence is wrapped in a per-``discord_id`` asyncio.Lock to
-        prevent a race condition where two concurrent requests for the same
-        member could both pass the stale-write check and both write — with
-        the older ``assigned_at`` potentially overwriting the newer one.
+        Implements the full decision tree from the wire contract (§ 6–7),
+        issue #65 AC, and issue #204 (unassign day_number resolution).
+        The entire idempotency-check → service call → UPSERT sequence is
+        wrapped in a per-``discord_id`` asyncio.Lock to prevent a race
+        condition where two concurrent requests for the same member could
+        both pass the stale-write check and both write — with the older
+        ``assigned_at`` potentially overwriting the newer one.
 
         1. Acquire the per-discord_id lock.
         2. Look up the stored state for ``body.discord_id``.
         3. **Exact replay** → return stored response, log replay event.
         4. **Stale write** → return skipped/stale_write, do nothing else.
-        5. **Fresh write** → invoke role service, UPSERT row, return result.
+        5. **Fresh write** (no row, or newer ``assigned_at``):
+
+           a. **Unassign with day_number=None**: resolve the effective
+              day_number from the stored state row.  No prior state row →
+              return skipped/already_lacks_role without calling the service.
+           b. Otherwise → invoke the role service, UPSERT the row, return
+              the result.
 
         If the stored row contains corrupted JSON in ``last_response_added``
         or ``last_response_removed`` (database corruption or prior-version
@@ -1031,14 +1049,59 @@ def build_app(
                             last_assigned_at=stored.last_assigned_at,
                         )
 
+                # Extract the previously-recorded day_number while the session
+                # is still open.  Required for the unassign path below where
+                # body.day_number is intentionally None per contract (§ 2).
+                prior_day_number: int | None = (
+                    stored.last_day_number if stored is not None else None
+                )
+
             # ------------------------------------------------------------------
             # Step 3: Fresh write — invoke role service
+            #
+            # For action="unassign" with day_number=None (the standard
+            # contract shape), the role to remove is determined by consulting
+            # the member's prior state rather than the inbound payload.
+            #
+            # - No prior state row (prior_day_number is None and stored is
+            #   None): member was never assigned a day role; return
+            #   skipped/already_lacks_role without calling the service.
+            # - Prior state row exists with last_day_number=N: resolve N as
+            #   the target day and pass it to apply_day_role so the service
+            #   can look up and remove the correct Discord role.
             # ------------------------------------------------------------------
+            if body.action == "unassign" and body.day_number is None:
+                if prior_day_number is None:
+                    # No prior assign state → member holds no day role.
+                    _logger.info(
+                        "role_sync correlation_id=%s discord_id=%s "
+                        "siege_id=%s day_number=%s action=%s "
+                        "assigned_at=%s status=skipped "
+                        "reason=already_lacks_role added=[] removed=[] attempt=1",
+                        body.correlation_id,
+                        body.discord_id,
+                        body.siege_id,
+                        body.day_number,
+                        body.action,
+                        body.assigned_at,
+                    )
+                    return RoleSyncResponse(
+                        status="skipped",
+                        added=[],
+                        removed=[],
+                        reason="already_lacks_role",
+                    )
+                # Resolve the day_number from prior state so the service can
+                # look up and remove the correct Discord role.
+                resolved_day_number: int | None = prior_day_number
+            else:
+                resolved_day_number = body.day_number
+
             result = await apply_day_role(
                 guild=guild,
                 discord_id=int(body.discord_id),
                 action=body.action,
-                day_number=body.day_number,
+                day_number=resolved_day_number,
                 correlation_id=body.correlation_id,
                 session_factory=session_factory,
             )
