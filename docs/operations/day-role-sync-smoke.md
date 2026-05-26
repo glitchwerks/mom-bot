@@ -143,10 +143,14 @@ currently holds) is removed from the member in Discord. No day roles remain.
 **Diagnostic:**
 
 1. Filter logs for `role_sync … status=applied`. The `removed` field should contain the role
-   snowflake. A `status=skipped reason=already_lacks_role` means the member did not hold the role
-   before the clear — which is correct if the role was never assigned, but unexpected if the
-   preceding scenario passed.
-2. If no log appears, follow the diagnostics from Step 1.2.
+   snowflake. A `status=skipped reason=already_lacks_role` means the member held no day role
+   before the clear — correct if the role was never assigned, but unexpected if the preceding
+   scenario passed.
+2. If you see `WARNING mom_bot.roles.service role_not_seeded … day_number=None` instead of
+   `status=applied`, the receiver is running a pre-#204 image and is incorrectly keying
+   the role lookup off the inbound `day_number=null` rather than consulting prior state.
+   Redeploy with the fix before continuing.
+3. If no log appears at all, follow the diagnostics from Step 1.2.
 
 ---
 

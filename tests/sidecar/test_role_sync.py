@@ -49,6 +49,14 @@ Concurrency
 Resilience
 ----------
 - Malformed JSON in stored row treated as cache miss → 200, row rewritten
+
+Unassign with day_number=None (issue #204)
+------------------------------------------
+- Unassign after prior assign → resolves day_number from state, removes role,
+  returns status=applied removed=[<prior_role_id>]
+- Unassign with no prior state → returns status=skipped
+  reason=already_lacks_role (not role_not_seeded)
+- Round-trip: assign Day N then unassign (day_number=null) → state cleared
 """
 
 from __future__ import annotations
@@ -1129,3 +1137,247 @@ class TestMalformedStoredJson:
         assert healed is not None
         assert json.loads(healed.last_response_added) == [42]
         assert json.loads(healed.last_response_removed) == []
+
+
+# ---------------------------------------------------------------------------
+# Unassign with day_number=None (issue #204)
+# ---------------------------------------------------------------------------
+
+
+_PRIOR_ROLE_ID = 1_385_267_473_099_653_170
+_PRIOR_DAY_NUMBER = 2
+_ASSIGN_AT = "2026-05-26T19:11:41.000Z"
+_UNASSIGN_AT = "2026-05-26T19:16:41.000Z"
+
+_ASSIGN_PAYLOAD_DAY2: dict[str, Any] = {
+    "discord_id": str(_DISCORD_ID),
+    "siege_id": _SIEGE_ID,
+    "day_number": _PRIOR_DAY_NUMBER,
+    "action": "assign",
+    "assigned_at": _ASSIGN_AT,
+    "correlation_id": "d4ac1381-a151-46e1-9b30-3568a2fc6834",
+}
+
+_UNASSIGN_PAYLOAD_NULL_DAY: dict[str, Any] = {
+    "discord_id": str(_DISCORD_ID),
+    "siege_id": _SIEGE_ID,
+    "action": "unassign",
+    "assigned_at": _UNASSIGN_AT,
+    "correlation_id": "93ce940c-bfc0-4eba-abff-fcec951edfbb",
+}
+
+
+class TestUnassignWithNullDayNumber:
+    """Unassign action where day_number=None (per contract) correctly removes
+    the member's previously-applied day role.
+
+    Covers issue #204 acceptance criteria:
+    - Unassign with day_number=null removes the previously-applied day role.
+    - No role_not_seeded warning fires on the unassign path.
+    - Receiver returns status=applied removed=[<role_id>] on success.
+    - Round-trip assign Day N → unassign (day_number=null) clears state.
+    - No prior state → status=skipped reason=already_lacks_role.
+    """
+
+    def test_unassign_null_day_with_prior_state_returns_applied(
+        self,
+        session_factory: sessionmaker[Session],
+        mock_guild: MagicMock,
+    ) -> None:
+        """Unassign (day_number=null) after a prior assign returns applied.
+
+        Pre-condition: member_role_sync_state row exists with
+        last_action='assign' and last_day_number=2.
+
+        The handler must look up the prior day_number (2) from the state row,
+        pass it to apply_day_role, and return the service result.
+        """
+        # Seed the prior assign state exactly as it would be after a
+        # successful assign for Day 2.
+        prior_removed: list[int] = []
+        with session_factory() as s:
+            row = MemberRoleSyncState(discord_id=str(_DISCORD_ID))
+            row.last_assigned_at = _ASSIGN_AT
+            row.last_action = "assign"
+            row.last_day_number = _PRIOR_DAY_NUMBER
+            row.last_correlation_id = "d4ac1381-a151-46e1-9b30-3568a2fc6834"
+            row.last_response_status = "applied"
+            row.last_response_added = json.dumps([_PRIOR_ROLE_ID])
+            row.last_response_removed = json.dumps(prior_removed)
+            row.last_response_reason = None
+            s.add(row)
+            s.commit()
+
+        unassign_result = RoleSyncResult(
+            status="applied",
+            added=[],
+            removed=[_PRIOR_ROLE_ID],
+            reason=None,
+        )
+        mock_service = AsyncMock(return_value=unassign_result)
+        app = build_app(
+            api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
+            guild=mock_guild,
+            session_factory=session_factory,
+        )
+        with patch("mom_bot.sidecar.app.apply_day_role", mock_service):
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/internal/role-sync",
+                    json=_UNASSIGN_PAYLOAD_NULL_DAY,
+                    headers=_auth_headers(),
+                )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "applied", (
+            f"Expected status=applied but got status={body['status']}; "
+            "unassign with day_number=null must consult prior state"
+        )
+        assert body["removed"] == [_PRIOR_ROLE_ID]
+        assert body["added"] == []
+
+        # apply_day_role must have been called with day_number=2 (looked up
+        # from the prior state row), not with day_number=None.
+        assert mock_service.call_count == 1
+        _call_kwargs = mock_service.call_args.kwargs
+        assert _call_kwargs["day_number"] == _PRIOR_DAY_NUMBER, (
+            f"apply_day_role called with day_number={_call_kwargs['day_number']}; "
+            f"expected {_PRIOR_DAY_NUMBER} resolved from prior state"
+        )
+        assert _call_kwargs["action"] == "unassign"
+
+    def test_unassign_null_day_no_prior_state_returns_skipped_already_lacks_role(
+        self,
+        session_factory: sessionmaker[Session],
+        mock_guild: MagicMock,
+    ) -> None:
+        """Unassign (day_number=null) with no prior state row returns skipped.
+
+        The reason must be already_lacks_role, not role_not_seeded.
+        apply_day_role must NOT be called (member genuinely has no day role).
+        """
+        mock_service = AsyncMock()
+        app = build_app(
+            api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
+            guild=mock_guild,
+            session_factory=session_factory,
+        )
+        with patch("mom_bot.sidecar.app.apply_day_role", mock_service):
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/internal/role-sync",
+                    json=_UNASSIGN_PAYLOAD_NULL_DAY,
+                    headers=_auth_headers(),
+                )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "skipped", f"Expected status=skipped but got {body['status']}"
+        assert body.get("reason") == "already_lacks_role", (
+            f"Expected reason=already_lacks_role but got {body.get('reason')}; "
+            "the role_not_seeded skip path must not fire for unassign"
+        )
+        # apply_day_role must NOT be called when there is nothing to remove.
+        assert (
+            mock_service.call_count == 0
+        ), "apply_day_role should not be called when there is no prior state"
+
+    def test_unassign_null_day_no_prior_state_does_not_log_role_not_seeded(
+        self,
+        session_factory: sessionmaker[Session],
+        mock_guild: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Unassign (day_number=null) with no prior state must NOT emit
+        role_not_seeded; that warning is reserved for truly missing day_role_map
+        rows, not for the case where the member held no day role.
+        """
+        mock_service = AsyncMock()
+        app = build_app(
+            api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
+            guild=mock_guild,
+            session_factory=session_factory,
+        )
+        with patch("mom_bot.sidecar.app.apply_day_role", mock_service):
+            with caplog.at_level(logging.WARNING):
+                with TestClient(app) as c:
+                    c.post(
+                        "/api/internal/role-sync",
+                        json=_UNASSIGN_PAYLOAD_NULL_DAY,
+                        headers=_auth_headers(),
+                    )
+
+        assert not any(
+            "role_not_seeded" in r.message for r in caplog.records
+        ), "role_not_seeded warning must not fire for unassign with no prior state"
+
+    def test_round_trip_assign_then_unassign_clears_state(
+        self,
+        session_factory: sessionmaker[Session],
+        mock_guild: MagicMock,
+    ) -> None:
+        """Full round-trip: assign Day 2 then unassign (day_number=null).
+
+        After the unassign, the state row must reflect the unassign
+        (last_action='unassign', last_day_number=None).
+        """
+        assign_result = RoleSyncResult(
+            status="applied",
+            added=[_PRIOR_ROLE_ID],
+            removed=[],
+        )
+        unassign_result = RoleSyncResult(
+            status="applied",
+            added=[],
+            removed=[_PRIOR_ROLE_ID],
+        )
+
+        def _side_effect(**kwargs: Any) -> RoleSyncResult:
+            if kwargs.get("action") == "assign":
+                return assign_result
+            return unassign_result
+
+        mock_service = AsyncMock(side_effect=_side_effect)
+        app = build_app(
+            api_key=_VALID_TOKEN,
+            bot=_FAKE_BOT,
+            guild=mock_guild,
+            session_factory=session_factory,
+        )
+        with patch("mom_bot.sidecar.app.apply_day_role", mock_service):
+            with TestClient(app) as c:
+                # Step 1: assign Day 2
+                r1 = c.post(
+                    "/api/internal/role-sync",
+                    json=_ASSIGN_PAYLOAD_DAY2,
+                    headers=_auth_headers(),
+                )
+                # Step 2: unassign (day_number=null per contract)
+                r2 = c.post(
+                    "/api/internal/role-sync",
+                    json=_UNASSIGN_PAYLOAD_NULL_DAY,
+                    headers=_auth_headers(),
+                )
+
+        assert r1.status_code == 200
+        assert r1.json()["status"] == "applied"
+        assert r2.status_code == 200
+        assert r2.json()["status"] == "applied", (
+            f"Unassign step returned status={r2.json()['status']}; "
+            "expected applied after prior assign"
+        )
+        assert r2.json()["removed"] == [_PRIOR_ROLE_ID]
+
+        # State row must now reflect the unassign.
+        with session_factory() as s:
+            row = s.get(MemberRoleSyncState, str(_DISCORD_ID))
+        assert row is not None
+        assert row.last_action == "unassign"
+        assert row.last_day_number is None
+        assert row.last_response_status == "applied"
+        removed_stored = json.loads(row.last_response_removed)
+        assert removed_stored == [_PRIOR_ROLE_ID]
