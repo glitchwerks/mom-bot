@@ -259,6 +259,20 @@ representative worst case.
 
 ---
 
+## If something breaks
+
+If any scenario fails and you need to stop the feature immediately, flip the producer flag:
+
+```
+az containerapp update -g siege-web-dev -n siege-web-api-dev --set-env-vars DAY_ROLE_SYNC_ENABLED=false
+```
+
+This halts all outbound webhook calls without touching mom-bot. For a full rollback decision tree —
+including receiver-side revert, state cleanup, and verification steps — see
+`docs/operations/day-role-sync-runbook.md` § 7 (Rollback).
+
+---
+
 ## After the smoke passes
 
 If all scenarios pass within SLO:

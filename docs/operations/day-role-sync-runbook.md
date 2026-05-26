@@ -463,6 +463,146 @@ member's assignment simultaneously. No mom-bot action is required.
 
 ---
 
+## 7. Rollback
+
+Use this section when the day-role sync feature needs to be disabled or its receiver reverted
+after a bad deployment. Two paths are available; choose based on which side is the cause.
+
+---
+
+### 7.1 Primary rollback — flip the producer flag (preferred)
+
+**Use this first.** Flipping `DAY_ROLE_SYNC_ENABLED=false` on siege-web stops all outbound
+webhook calls immediately. Mom-bot's `ca-mom-bot` Container App continues running without
+interruption — it simply receives no new calls. This is zero-downtime on the mom-bot side and
+fully reversible by re-flipping the flag.
+
+**Dev:**
+```
+az containerapp update -g siege-web-dev -n siege-web-api-dev --set-env-vars DAY_ROLE_SYNC_ENABLED=false
+```
+
+**Prod:**
+```
+az containerapp update -g <TODO: confirm prod resource name> -n <TODO: confirm prod resource name> --set-env-vars DAY_ROLE_SYNC_ENABLED=false
+```
+
+Allow approximately 30 seconds for siege-web to roll out the new revision. Then confirm the flag
+took effect:
+
+```
+az containerapp show -g <rg> -n <app> --query "properties.template.containers[0].env[?name=='DAY_ROLE_SYNC_ENABLED']" -o json
+```
+
+Expected: the returned object includes `"value": "false"`.
+
+**Confirm silence on the receiver side.** After the revision rolls out, tail mom-bot's logs for a
+5-minute window and confirm no new `role_sync` lines appear:
+
+```
+az containerapp logs show -g mom-bot -n ca-mom-bot --tail 50
+```
+
+No new `role_sync` lines in that window confirms the producer is gated and the receiver has gone
+quiet.
+
+---
+
+### 7.2 Receiver rollback — revert `ca-mom-bot` to a prior revision
+
+**Use this when the receiver itself is the cause** — for example, a bad image was deployed to
+`ca-mom-bot` and is producing runtime errors — and the producer (siege-web) is still emitting
+webhooks cleanly.
+
+`ca-mom-bot` runs in **single revision mode**: only one revision receives traffic at a time.
+Reverting traffic to a prior revision requires deactivating the current (bad) revision and
+activating the last-known-good one. No load-balancer weights or traffic-split rules are involved.
+
+#### Step 1 — List revisions and identify last-known-good
+
+```
+az containerapp revision list -g mom-bot -n ca-mom-bot --query "[].{name:name, active:properties.active, health:properties.healthState, created:properties.createdTime, image:properties.template.containers[0].image}" -o table
+```
+
+Review the output. The last-known-good revision is the most recent one with `health=Healthy`
+that predates the bad deployment. Note its `name` value.
+
+#### Step 2 — Deactivate the bad revision
+
+```
+az containerapp revision deactivate -g mom-bot -n ca-mom-bot --revision <bad-rev>
+```
+
+#### Step 3 — Activate the prior healthy revision
+
+```
+az containerapp revision activate -g mom-bot -n ca-mom-bot --revision <good-rev>
+```
+
+In single revision mode, activating the good revision routes all traffic back to it. The bad
+revision remains listed (deactivated) until it is cleaned up.
+
+#### When to use receiver rollback vs. flag-off
+
+| Situation | Preferred path |
+|---|---|
+| Producer is healthy; receiver has a runtime error or bad image | Receiver rollback (§ 7.2) |
+| Either side is uncertain; need immediate stop | Flag-off (§ 7.1) — faster, no revision management |
+| Both are suspect | Flag-off first to stop the firehose; then diagnose receiver independently |
+
+---
+
+### 7.3 State considerations
+
+#### In-flight events
+
+Any webhook already in HTTP transit when the producer flag flips will still arrive at the
+receiver and be processed. This is acceptable — the endpoint is idempotent and these events will
+complete normally.
+
+#### `member_role_sync_state` table
+
+No cleanup is needed. The table is idempotent: stale rows are harmless because the table is only
+consulted on subsequent `action=unassign` events (fixed in #205). A stale row from a partial cycle
+will either be overwritten by the next `assign` or no-op cleanly on the next `unassign`.
+
+#### Discord role residue
+
+If rollback occurs mid-cycle, some members may hold a stale `Attack Day N` role in Discord —
+for example, a Day 1 role was assigned but the expected unassign (from a subsequent reassign) never
+fired because the producer was stopped. The system does not self-heal on a timed basis. Recovery
+is manual:
+
+1. Identify affected members via Discord Server Settings → Roles → `Attack Day N` → Members.
+2. Strip the stale role from each member individually via Discord Server Settings → Members.
+
+There is no "sync all members" reconciliation command — that facility is deferred. When the feature
+is re-enabled, the next legitimate `assign` or `unassign` event for each affected member will
+overwrite any residue automatically.
+
+---
+
+### 7.4 Verification after rollback
+
+Confirm the rollback is effective before closing the incident:
+
+1. **No new `role_sync` log lines in receiver logs** over a 5-minute window post-rollback (see
+   § 7.1 for the `az containerapp logs show` command).
+
+2. **A test toggle in siege-web produces no Discord role change.** If you optionally flip the
+   feature flag on in a controlled test, no Discord role change should result — because the flag is
+   the gate and will be returned to `false` immediately after the test.
+
+3. **Member state in `member_role_sync_state` is unchanged from the pre-rollback snapshot.**
+   Query the table to confirm no new rows or updates appeared after the rollback completed:
+   ```sql
+   SELECT discord_id, last_assigned_at, updated_at FROM member_role_sync_state ORDER BY updated_at DESC LIMIT 20;
+   ```
+   If rows are still being updated after flag-off, in-flight events are still draining — this is
+   expected for up to a minute after the flip. Stable rows confirm the drain is complete.
+
+---
+
 ## Cross-references
 
 - Pre-flight checklist: `docs/operations/discord-roles-preflight.md`
