@@ -98,6 +98,8 @@ _EXPECTED_TABLES = frozenset(
         "alembic_version",
         "reminders",
         "reminder_sent",
+        "day_role_map",
+        "member_role_sync_state",
     }
 )
 
@@ -179,9 +181,11 @@ class TestPostgresMigration:
     def test_upgrade_head_creates_expected_tables(self, pg_url: str) -> None:
         """``alembic upgrade head`` creates all expected tables on Postgres.
 
-        Asserts that ``reminders``, ``reminder_sent``, and
-        ``alembic_version`` all exist after running the full migration chain.
-        Schema is already migrated by the ``_migrated_schema`` class fixture.
+        Asserts that all five expected tables — ``alembic_version``,
+        ``reminders``, ``reminder_sent``, ``day_role_map``, and
+        ``member_role_sync_state`` — exist after running the full migration
+        chain.  Schema is already migrated by the ``_migrated_schema`` class
+        fixture.
 
         Args:
             pg_url: Connection string for the ephemeral Postgres container.
@@ -241,3 +245,55 @@ class TestPostgresMigration:
                 )
             )
         engine.dispose()
+
+    def test_inserts_realistic_discord_snowflake_round_trip(self, pg_url: str) -> None:
+        """19-digit Discord snowflakes survive a Postgres INSERT/SELECT
+        round-trip without truncation or overflow.
+
+        Regression test for issue #122 / PR #123, where
+        ``reminders.channel_id`` and ``reminders.role_mention_id`` were
+        declared as ``INTEGER`` (32-bit) on PostgreSQL, causing
+        ``psycopg.errors.NumericValueOutOfRange`` at INSERT time when a real
+        Discord snowflake value (e.g. ``1385263344684109955``) was used.
+        Migration ``0003_widen_reminder_snowflakes`` widened both columns to
+        ``BIGINT`` to fix this.
+
+        Uses the exact snowflake from the #122 prod crash
+        (``1385263344684109955``) for both ``channel_id`` and
+        ``role_mention_id`` to prove no silent truncation occurs.
+
+        Args:
+            pg_url: Connection string for the ephemeral Postgres container.
+        """
+        snowflake = 1385263344684109955
+        engine = sa.create_engine(pg_url)
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO reminders "
+                    "(name, channel_id, weekday, fire_time_utc,"
+                    " message_template, role_mention_id,"
+                    " created_at, updated_at) "
+                    "VALUES ('SnowflakeTest', :channel_id, 0, '09:00:00',"
+                    " 'test', :role_mention_id, NOW(), NOW())"
+                ).bindparams(
+                    channel_id=snowflake,
+                    role_mention_id=snowflake,
+                )
+            )
+            row = conn.execute(
+                sa.text(
+                    "SELECT channel_id, role_mention_id FROM reminders "
+                    "WHERE name = 'SnowflakeTest'"
+                )
+            ).fetchone()
+
+        engine.dispose()
+
+        assert row is not None, "Expected inserted row to be retrievable"
+        assert row[0] == snowflake, (
+            f"channel_id round-trip failed: " f"inserted {snowflake}, got {row[0]}"
+        )
+        assert row[1] == snowflake, (
+            f"role_mention_id round-trip failed: " f"inserted {snowflake}, got {row[1]}"
+        )
