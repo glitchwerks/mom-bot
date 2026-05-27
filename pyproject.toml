@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mom-bot"
-version = "0.0.1"
+version = "1.0.0-rc.0"
 description = "RAID guild Discord bot"
 requires-python = ">=3.12"
 dependencies = [
