@@ -1,0 +1,201 @@
+name: Release
+
+# Fires on any v* tag push (stable: v1.0.0, pre-release: v1.0.0-rc.1).
+# Publishes two artifacts:
+#   1. A GitHub Release with notes extracted from CHANGELOG.md.
+#   2. An immutable GHCR image at ghcr.io/glitchwerks/mom-bot:vX.Y.Z.
+#
+# This workflow does NOT deploy to prod.  Deploy is a separate manual step
+# via workflow_dispatch on deploy.yml.  See RELEASING.md § "Deploy is separate".
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — verify
+  # Fail-fast preflight: confirm the tag is internally consistent before
+  # building anything.  Checks:
+  #   - pyproject.toml version matches tag (PEP 440 canonical comparison)
+  #   - CHANGELOG.md contains a section for this version
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify tag consistency
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    outputs:
+      version: ${{ steps.preflight.outputs.version }}
+      is_prerelease: ${{ steps.preflight.outputs.is_prerelease }}
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Preflight checks
+        id: preflight
+        run: |
+          # Derive version from tag ref (strips "refs/tags/v" prefix).
+          # IMPORTANT: TAG and VERSION are derived from a caller-controlled git ref
+          # (anyone with push access can choose the tag name). They MUST be validated
+          # BEFORE any use that interpolates them into a double-quoted shell context —
+          # including the diagnostic `echo` that announces them. An injected
+          # `v1.0.0"; whoami; echo "` would execute on first interpolation, before
+          # any validation block placed AFTER the echo could run.
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+
+          # Validate VERSION matches a strict semver shape with safe characters only.
+          # Use printf '%s\n' instead of echo so the value is passed verbatim as a
+          # format string argument (no embedded interpolation that an attacker-shaped
+          # value could break out of). grep then reads from stdin, where the value
+          # is a data stream, not shell input.
+          if ! printf '%s\n' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
+            # Diagnostic also uses printf to avoid re-interpolating the unsafe value.
+            printf '::error::Invalid version format: %s (expected semver, e.g. 1.0.0 or 1.0.0-rc.1)\n' "$VERSION"
+            exit 1
+          fi
+
+          # Now safe to use TAG/VERSION in normal shell expansion.
+          echo "Tag: $TAG  Version: $VERSION"
+
+          # Determine pre-release: any version containing a hyphen is a pre-release
+          if echo "$VERSION" | grep -q '-'; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+          echo "is_prerelease=$IS_PRERELEASE"
+
+          # --- Check 1: pyproject.toml version must match the tag (PEP 440) ---
+          # mom-bot requires Python >= 3.12, so tomllib is stdlib.
+          PYPROJECT_VERSION=$(python3 -c "
+          import tomllib, sys
+          with open('pyproject.toml', 'rb') as f:
+              data = tomllib.load(f)
+          print(data['project']['version'])
+          ")
+          echo "pyproject.toml version: $PYPROJECT_VERSION"
+
+          # Normalize both versions via packaging.version for canonical comparison.
+          # packaging is available in the runner's Python; if not, pip-install it.
+          python3 -c "
+          import sys
+          try:
+              from packaging.version import Version
+          except ImportError:
+              import subprocess
+              subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'packaging', '-q'])
+              from packaging.version import Version
+
+          tag_ver = sys.argv[1]
+          pyproject_ver = sys.argv[2]
+          try:
+              normalized_tag = Version(tag_ver)
+              normalized_pyproject = Version(pyproject_ver)
+          except Exception as e:
+              print(f'::error::Failed to parse version: {e}')
+              sys.exit(1)
+          if normalized_tag != normalized_pyproject:
+              print(f'::error::Version mismatch: tag is \"{tag_ver}\" (normalized: {normalized_tag}) but pyproject.toml has \"{pyproject_ver}\" (normalized: {normalized_pyproject}). Update pyproject.toml before tagging.')
+              sys.exit(1)
+          print(f'Version check passed: {normalized_tag}')
+          " "$VERSION" "$PYPROJECT_VERSION"
+
+          # --- Check 2: CHANGELOG.md must contain ## [<version>] section ---
+          # The version here is the un-normalized tag form (e.g. 1.0.0, 1.0.0-rc.1).
+          CHANGELOG_HEADER="## [$VERSION]"
+          if ! grep -qF "$CHANGELOG_HEADER" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md does not contain a section for \"$CHANGELOG_HEADER\". Add release notes under that heading before tagging."
+            exit 1
+          fi
+          echo "CHANGELOG check passed: found \"$CHANGELOG_HEADER\""
+
+          # Emit outputs for downstream jobs
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — release
+  # Builds the versioned GHCR image and creates the GitHub Release.
+  # Only runs after verify succeeds.
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: verify
+    permissions:
+      contents: write   # required for gh release create
+      packages: write   # required for GHCR push
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Extract CHANGELOG section
+        id: changelog
+        run: |
+          VERSION="${{ needs.verify.outputs.version }}"
+          EXCERPT_FILE="$(mktemp /tmp/changelog-excerpt.XXXXXX)"
+
+          # Extract from the line starting with "## [VERSION]" (Keep-a-Changelog format:
+          # "## [X.Y.Z] - YYYY-MM-DD") up to (not including) the next "## [" line or EOF.
+          awk -v header="## [$VERSION]" '
+            found && /^## \[/ { exit }
+            found { print }
+            index($0, header) == 1 { found=1 }
+          ' CHANGELOG.md > "$EXCERPT_FILE"
+
+          if [ ! -s "$EXCERPT_FILE" ]; then
+            echo "::error::Extracted CHANGELOG section for \"$VERSION\" is empty. Verify CHANGELOG.md formatting."
+            exit 1
+          fi
+
+          echo "Extracted CHANGELOG section:"
+          cat "$EXCERPT_FILE"
+          echo "excerpt_file=$EXCERPT_FILE" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push versioned GHCR image
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75  # v6.9.0
+        with:
+          context: .
+          push: true
+          # Tag with the full v-prefixed tag (e.g. v1.0.0, v1.0.0-rc.1).
+          # Do NOT push :latest or touch :main — those are managed by build-image.yml.
+          tags: ghcr.io/glitchwerks/mom-bot:${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          EXCERPT_FILE="${{ steps.changelog.outputs.excerpt_file }}"
+          IS_PRERELEASE="${{ needs.verify.outputs.is_prerelease }}"
+
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          # Idempotent: if the Release already exists (e.g. a previous run created
+          # it before failing on the GHCR push step), update its notes in place
+          # instead of failing.  Reruns of this workflow should converge, not
+          # require manual cleanup.
+          if ! gh release create "$TAG" \
+                 --title "$TAG" \
+                 --notes-file "$EXCERPT_FILE" \
+                 $PRERELEASE_FLAG; then
+            echo "Release create failed; attempting edit-in-place for idempotent rerun."
+            gh release edit "$TAG" --notes-file "$EXCERPT_FILE"
+          fi
