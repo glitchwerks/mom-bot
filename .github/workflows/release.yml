@@ -42,6 +42,18 @@ jobs:
           VERSION="${TAG#v}"
           echo "Tag: $TAG  Version: $VERSION"
 
+          # Validate VERSION matches a strict semver shape before it is used in any
+          # subsequent shell expansion (defense-in-depth: tag names are caller-controlled,
+          # so an attacker with push access could craft a tag like
+          # `v1.0.0"; whoami; echo "` that would inject commands when interpolated
+          # into double-quoted strings later in this workflow).  We reject anything
+          # that is not a strict semver core (X.Y.Z) with optional PEP 440 / semver
+          # pre-release and build-metadata suffixes composed of safe characters only.
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Invalid version format: $VERSION (expected semver, e.g. 1.0.0 or 1.0.0-rc.1)"
+            exit 1
+          fi
+
           # Determine pre-release: any version containing a hyphen is a pre-release
           if echo "$VERSION" | grep -q '-'; then
             IS_PRERELEASE=true
@@ -169,7 +181,14 @@ jobs:
             PRERELEASE_FLAG="--prerelease"
           fi
 
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file "$EXCERPT_FILE" \
-            $PRERELEASE_FLAG
+          # Idempotent: if the Release already exists (e.g. a previous run created
+          # it before failing on the GHCR push step), update its notes in place
+          # instead of failing.  Reruns of this workflow should converge, not
+          # require manual cleanup.
+          if ! gh release create "$TAG" \
+                 --title "$TAG" \
+                 --notes-file "$EXCERPT_FILE" \
+                 $PRERELEASE_FLAG; then
+            echo "Release create failed; attempting edit-in-place for idempotent rerun."
+            gh release edit "$TAG" --notes-file "$EXCERPT_FILE"
+          fi
