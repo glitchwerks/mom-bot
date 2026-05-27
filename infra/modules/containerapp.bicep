@@ -88,6 +88,18 @@ param maxReplicas int = 1
 @description('Environment prefix used in the MOM_BOT_ENV env var and to derive KV secret names (e.g. \'prod\' → \'prod-database-url\'). Default \'prod\' preserves current single-env behavior.')
 param momBotEnv string = 'prod'
 
+@secure()
+@description('Log Analytics workspace customer ID for CAE appLogsConfiguration.')
+param logAnalyticsCustomerId string
+
+@secure()
+@description('Log Analytics workspace shared key for CAE appLogsConfiguration.')
+param logAnalyticsSharedKey string
+
+@secure()
+@description('Application Insights connection string, exposed to mom-bot container as APPLICATIONINSIGHTS_CONNECTION_STRING.')
+param appInsightsConnectionString string
+
 // ---------------------------------------------------------------------------
 // Container Apps Environment (Consumption profile)
 // ---------------------------------------------------------------------------
@@ -98,6 +110,13 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
   properties: {
     // Consumption-only: no workloadProfiles block → defaults to Consumption.
     zoneRedundant: false
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalyticsCustomerId
+        sharedKey: logAnalyticsSharedKey
+      }
+    }
   }
 }
 
@@ -183,6 +202,13 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
           keyVaultUrl: '${keyVaultUri}secrets/${momBotEnv}-database-url'
           identity: managedIdentityId
         }
+        {
+          // Sourced directly from the AI Bicep resource (not KV) to avoid the
+          // PLACEHOLDER drift documented in #199. The connection string is
+          // injected at Bicep param resolution time.
+          name: 'app-insights-connection-string'
+          value: appInsightsConnectionString
+        }
       ]
     }
     template: {
@@ -223,6 +249,10 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'MOM_BOT_DATABASE_URL'
               secretRef: 'database-url'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              secretRef: 'app-insights-connection-string'
             }
           ]
           volumeMounts: [

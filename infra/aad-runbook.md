@@ -484,11 +484,20 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-database-url  -
 az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-database-url --value "sqlite:////data/mom_bot.db" | Out-Null
 ```
 
-### App Insights connection string — placeholder until Epic 1
+### App Insights connection string — Bicep-managed since PR #182
+
+> **Bicep-managed since issue #182 — the Application Insights resource and its
+> connection string are now provisioned by `infra/modules/observability.bicep`.
+> `APPLICATIONINSIGHTS_CONNECTION_STRING` is injected into the Container App
+> as a container secret sourced directly from the Bicep output (not from KV),
+> avoiding the PLACEHOLDER drift documented in #199. Do NOT set
+> `prod-app-insights-conn-string` in Key Vault by hand; the secret is no longer
+> referenced. The `dev-*` command below remains manual (dev env is not
+> provisioned by this Bicep template).**
 
 ```powershell
+# Dev only — prod is Bicep-managed (see above).
 az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-app-insights-conn-string  --value "PLACEHOLDER" | Out-Null
-az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-app-insights-conn-string --value "PLACEHOLDER" | Out-Null
 ```
 
 ### Reminder scheduler secrets — channel name and mention role (no Developer Mode required)

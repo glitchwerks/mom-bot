@@ -134,6 +134,21 @@ module storage 'modules/storage.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
+// Observability (Log Analytics Workspace + Application Insights)
+// Must be declared before containerApp so Bicep resolves the symbol
+// references in the containerApp params block below.
+// ---------------------------------------------------------------------------
+
+module observability 'modules/observability.bicep' = {
+  name: 'deploy-observability'
+  scope: rg
+  params: {
+    location: location
+    baseName: 'mom-bot-eastus2'
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Container Apps (environment + app + CAE storage binding)
 // ---------------------------------------------------------------------------
 
@@ -152,5 +167,8 @@ module containerApp 'modules/containerapp.bicep' = {
     storageAccountName: storage.outputs.storageAccountName
     maxReplicas: 1
     momBotEnv: momBotEnv
+    logAnalyticsCustomerId: observability.outputs.logAnalyticsCustomerId
+    logAnalyticsSharedKey: observability.outputs.logAnalyticsSharedKey
+    appInsightsConnectionString: observability.outputs.appInsightsConnectionString
   }
 }
