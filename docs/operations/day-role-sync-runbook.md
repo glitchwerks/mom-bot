@@ -468,6 +468,23 @@ member's assignment simultaneously. No mom-bot action is required.
 Use this section when the day-role sync feature needs to be disabled or its receiver reverted
 after a bad deployment. Two paths are available; choose based on which side is the cause.
 
+**Rate-limit behaviour under sustained unauthenticated load (issue #209):** The sidecar now
+responds `429 Too Many Requests` (with a `Retry-After` header) before running the bearer-token
+check when a source IP exceeds the `RATE_LIMIT_PER_IP` threshold (default `60/minute`) or the
+aggregate `RATE_LIMIT_TOTAL` threshold (default `200/minute`). This prevents compute exhaustion
+from pre-auth floods. If a legitimate siege-web fan-out (e.g. a bulk day-role assignment for a
+large roster) drives individual IP requests above the per-IP threshold and legitimate calls begin
+returning `429`, raise the limit via a Container App environment-variable update — do not disable
+the limiter:
+
+```
+az containerapp update -g mom-bot -n ca-mom-bot --set-env-vars RATE_LIMIT_PER_IP="120/minute"
+```
+
+Both `RATE_LIMIT_PER_IP` and `RATE_LIMIT_TOTAL` are live-tunable without redeployment — a new
+revision is created automatically and rolls out in ~30 s. The in-memory counter resets on each
+revision rollout, so raising the limit is instant and safe.
+
 ---
 
 ### 7.1 Primary rollback — flip the producer flag (preferred)
