@@ -29,8 +29,7 @@ param momBotEnv = 'prod'
 // operator-set per infra/aad-runbook.md Step 8.
 param reminderChannelName     = 'moms-reminders'
 param reminderMentionRoleName = 'Member'
-// UNVERIFIED: confirm the actual prod guild ID before deploying.
-// Read from KV: az keyvault secret show --vault-name kv-mombot-eastus2 --name prod-guild-id --query value -o tsv
-// Then update this value and re-run: az deployment sub what-if ... --parameters infra/main.bicepparam
-param guildId = 'NEEDS_OPERATOR_CONFIRMATION'
+// Operator-confirmed prod Discord guild snowflake (2026-05-27).
+// Passes @minLength(17)/@maxLength(20) decorators added in 40355b7.
+param guildId = '1112031869337346184'
 
