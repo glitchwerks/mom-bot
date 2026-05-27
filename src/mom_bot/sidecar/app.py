@@ -158,9 +158,7 @@ _logger = logging.getLogger(__name__)
 
 # Regex for the slowapi limit string syntax: <positive-int>/<unit>
 # Valid units: second, minute, hour, day (singular only, per slowapi docs).
-_RATE_LIMIT_PATTERN: re.Pattern[str] = re.compile(
-    r"^\d+/(second|minute|hour|day)$"
-)
+_RATE_LIMIT_PATTERN: re.Pattern[str] = re.compile(r"^\d+/(second|minute|hour|day)$")
 
 
 def _validate_rate_limit_env(name: str, value: str) -> None:
@@ -507,7 +505,7 @@ def build_app(
         default_limits=[_rate_limit_per_ip],
         headers_enabled=True,
     )
-    _limiter._application_limits.append(  # type: ignore[attr-defined]
+    _limiter._application_limits.append(
         LimitGroup(
             _rate_limit_total,
             _global_rate_limit_key,

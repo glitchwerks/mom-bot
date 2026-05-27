@@ -378,9 +378,7 @@ class TestTotalRateLimit:
     distinct IP key.
     """
 
-    def test_total_limit_fires_across_distinct_ips(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_total_limit_fires_across_distinct_ips(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """6th request returns 429 when RATE_LIMIT_TOTAL=5/minute.
 
         Each of the 6 requests carries a different X-Forwarded-For header.
@@ -406,9 +404,7 @@ class TestTotalRateLimit:
         )
         _reset_limiter(client)
 
-        distinct_ips = [
-            f"192.0.2.{i}" for i in range(1, 7)
-        ]
+        distinct_ips = [f"192.0.2.{i}" for i in range(1, 7)]
 
         # First 5 requests from distinct IPs must NOT be rate-limited.
         # If XFF is not read, request 3 would 429 on per-IP (not total),
