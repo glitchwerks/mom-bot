@@ -105,16 +105,39 @@ jobs:
           " "$VERSION" "$PYPROJECT_VERSION"
 
           # --- Check 2: CHANGELOG.md must contain ## [<version>] section ---
-          # The version here is the un-normalized tag form (e.g. 1.0.0, 1.0.0-rc.1).
-          CHANGELOG_HEADER="## [$VERSION]"
+          # Pre-release versions (1.0.0-rc.1, 1.0.0-beta.2) share their parent
+          # version's CHANGELOG section — RCs are not separate releases with their
+          # own changelog buckets, they're candidates for the parent version.
+          # Strategy: try the exact version first; if not found AND the version is
+          # a pre-release, fall back to the base version (the part before the
+          # first hyphen).
+          CHANGELOG_VERSION="$VERSION"
+          CHANGELOG_HEADER="## [$CHANGELOG_VERSION]"
           if ! grep -qF "$CHANGELOG_HEADER" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md does not contain a section for \"$CHANGELOG_HEADER\". Add release notes under that heading before tagging."
-            exit 1
+            # Not found at the exact version. If this is a pre-release, try the
+            # base version (strip everything from the first hyphen onward).
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              BASE_VERSION="${VERSION%%-*}"
+              CHANGELOG_HEADER="## [$BASE_VERSION]"
+              if grep -qF "$CHANGELOG_HEADER" CHANGELOG.md; then
+                CHANGELOG_VERSION="$BASE_VERSION"
+                echo "CHANGELOG section for \"$VERSION\" not found; using parent version \"$BASE_VERSION\" section (pre-release sharing parent notes)."
+              else
+                echo "::error::CHANGELOG.md does not contain a section for \"## [$VERSION]\" nor for the parent version \"## [$BASE_VERSION]\". Add release notes under one of those headings before tagging."
+                exit 1
+              fi
+            else
+              echo "::error::CHANGELOG.md does not contain a section for \"$CHANGELOG_HEADER\". Add release notes under that heading before tagging."
+              exit 1
+            fi
           fi
-          echo "CHANGELOG check passed: found \"$CHANGELOG_HEADER\""
+          echo "CHANGELOG check passed: using section \"$CHANGELOG_HEADER\""
 
-          # Emit outputs for downstream jobs
+          # Emit outputs for downstream jobs.
+          # changelog_version is the literal version whose CHANGELOG section was
+          # matched — may differ from version when an RC falls back to its parent.
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "changelog_version=$CHANGELOG_VERSION" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
@@ -136,19 +159,22 @@ jobs:
       - name: Extract CHANGELOG section
         id: changelog
         run: |
-          VERSION="${{ needs.verify.outputs.version }}"
+          # Use changelog_version (set by the verify job), which is either the
+          # exact tag version OR the parent version for pre-releases that share
+          # the parent's notes.
+          CHANGELOG_VERSION="${{ needs.verify.outputs.changelog_version }}"
           EXCERPT_FILE="$(mktemp /tmp/changelog-excerpt.XXXXXX)"
 
           # Extract from the line starting with "## [VERSION]" (Keep-a-Changelog format:
           # "## [X.Y.Z] - YYYY-MM-DD") up to (not including) the next "## [" line or EOF.
-          awk -v header="## [$VERSION]" '
+          awk -v header="## [$CHANGELOG_VERSION]" '
             found && /^## \[/ { exit }
             found { print }
             index($0, header) == 1 { found=1 }
           ' CHANGELOG.md > "$EXCERPT_FILE"
 
           if [ ! -s "$EXCERPT_FILE" ]; then
-            echo "::error::Extracted CHANGELOG section for \"$VERSION\" is empty. Verify CHANGELOG.md formatting."
+            echo "::error::Extracted CHANGELOG section for \"$CHANGELOG_VERSION\" is empty. Verify CHANGELOG.md formatting."
             exit 1
           fi
 
