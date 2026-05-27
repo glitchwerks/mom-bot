@@ -43,6 +43,21 @@ param tenantId string = subscription().tenantId
 param momBotEnv string = 'prod'
 
 // ---------------------------------------------------------------------------
+// Non-credential configuration values (issues #121, #236).
+// These are plain config strings with no security value — source of truth is
+// main.bicepparam. Credentials remain operator-set (see aad-runbook.md §8).
+// ---------------------------------------------------------------------------
+
+@description('Discord channel name where reminder notifications fire.')
+param reminderChannelName string
+
+@description('Discord role name to mention when reminders fire (e.g. \'Member\').')
+param reminderMentionRoleName string
+
+@description('Discord guild (server) snowflake ID for this environment. UNVERIFIED — confirm actual prod value before deploying (see infra/aad-runbook.md §8 Guild IDs).')
+param guildId string
+
+// ---------------------------------------------------------------------------
 // Resource group
 // ---------------------------------------------------------------------------
 
@@ -75,6 +90,10 @@ module kv 'modules/keyvault.bicep' = {
     location: location
     keyVaultName: keyVaultName
     managedIdentityPrincipalId: identity.outputs.principalId
+    momBotEnv: momBotEnv
+    reminderChannelName: reminderChannelName
+    reminderMentionRoleName: reminderMentionRoleName
+    guildId: guildId
   }
 }
 

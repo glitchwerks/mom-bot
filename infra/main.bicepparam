@@ -24,3 +24,13 @@ param containerImage = readEnvironmentVariable('CONTAINER_IMAGE', 'mcr.microsoft
 // Default 'prod' preserves current single-env behavior.
 param momBotEnv = 'prod'
 
+// Non-credential KV values — provisioned via Bicep (issues #121, #236).
+// Credentials (discord-token, database-url, app-insights-conn-string) remain
+// operator-set per infra/aad-runbook.md Step 8.
+param reminderChannelName     = 'moms-reminders'
+param reminderMentionRoleName = 'Member'
+// UNVERIFIED: confirm the actual prod guild ID before deploying.
+// Read from KV: az keyvault secret show --vault-name kv-mombot-eastus2 --name prod-guild-id --query value -o tsv
+// Then update this value and re-run: az deployment sub what-if ... --parameters infra/main.bicepparam
+param guildId = 'NEEDS_OPERATOR_CONFIRMATION'
+

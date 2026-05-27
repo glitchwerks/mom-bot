@@ -455,6 +455,12 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-discord-token 
 
 ### Guild IDs — different per environment
 
+> **Bicep-managed since PR #N (issues #121, #236) — `prod-guild-id` is now
+> provisioned by `infra/main.bicep`. Do not run the `prod-guild-id` command
+> below by hand; edit `infra/main.bicepparam` (`param guildId`) instead and
+> redeploy. The `dev-guild-id` command remains manual (dev env is not
+> provisioned by this Bicep template).**
+
 Each Discord server has its own ID. Right-click your server name in Discord
 (with Developer Mode on: User Settings → Advanced → Developer Mode) → "Copy
 Server ID".
@@ -462,11 +468,10 @@ Server ID".
 Guild IDs are public identifiers — they are safe to echo to the terminal.
 
 ```powershell
+# DEV only — prod-guild-id is Bicep-managed (see note above).
 $devGuildId  = Read-Host "Paste your DEV guild ID (test server)"
-$prodGuildId = Read-Host "Paste your PROD guild ID (real server)"
 
 az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-guild-id  --value $devGuildId  | Out-Null
-az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-guild-id --value $prodGuildId | Out-Null
 ```
 
 ### Database URL — different per environment
@@ -486,19 +491,33 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-app-insights-co
 az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-app-insights-conn-string --value "PLACEHOLDER" | Out-Null
 ```
 
-### Reminder scheduler secrets — channel name (no Developer Mode required)
+### Reminder scheduler secrets — channel name and mention role (no Developer Mode required)
+
+> **Bicep-managed since PR #N (issues #121, #236) — `prod-reminder-channel-name`
+> and `prod-reminder-mention-role-name` are now provisioned by
+> `infra/main.bicep`. Do not run the `prod-*` commands below by hand; edit
+> `infra/main.bicepparam` (`param reminderChannelName` / `param
+> reminderMentionRoleName`) instead and redeploy. The `dev-*` commands remain
+> manual (dev env is not provisioned by this Bicep template).**
 
 Both the Hydra and Chimera reminders fire to the **same channel** in each
 environment (collapsed from two per-reminder secrets in #43). Reminders post
 without pinging any role (#45). The secret value is the **channel name** as
 a plain string — no Developer Mode, no right-click, no snowflake copy (#47).
+The mention role name (restored in #51) is similarly a plain string.
 
 ```powershell
+# DEV only — prod-reminder-channel-name is Bicep-managed (see note above).
 $devReminderChannelName  = Read-Host "Paste your DEV reminder channel NAME (e.g. reminders)"
-$prodReminderChannelName = Read-Host "Paste your PROD reminder channel NAME (e.g. reminders)"
 
 az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-reminder-channel-name  --value $devReminderChannelName  | Out-Null
-az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-reminder-channel-name --value $prodReminderChannelName | Out-Null
+```
+
+```powershell
+# DEV only — prod-reminder-mention-role-name is Bicep-managed (see note above).
+$devReminderMentionRoleName = Read-Host "Paste your DEV reminder mention role NAME (e.g. Member)"
+
+az keyvault secret set --vault-name kv-mombot-eastus2 --name dev-reminder-mention-role-name --value $devReminderMentionRoleName | Out-Null
 ```
 
 > **Note**: If you previously seeded `*-reminder-{hydra,chimera}-channel-id`,
@@ -515,10 +534,11 @@ az keyvault secret list --vault-name kv-mombot-eastus2 --query "[].name" -o tsv
 You should see, at minimum:
 
 - `dev-discord-token`, `prod-discord-token`
-- `dev-guild-id`, `prod-guild-id`
+- `dev-guild-id`, `prod-guild-id` ← `prod-guild-id` provisioned by Bicep (#121, #236)
 - `dev-database-url`, `prod-database-url`
 - `dev-app-insights-conn-string`, `prod-app-insights-conn-string`
-- `dev-reminder-channel-name`, `prod-reminder-channel-name`
+- `dev-reminder-channel-name`, `prod-reminder-channel-name` ← `prod-*` provisioned by Bicep (#121)
+- `dev-reminder-mention-role-name`, `prod-reminder-mention-role-name` ← `prod-*` provisioned by Bicep (#121)
 
 ### When to split into two bot applications
 
