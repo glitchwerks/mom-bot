@@ -85,6 +85,9 @@ param fileShareName string = 'mom-bot-data'
 @allowed([1])
 param maxReplicas int = 1
 
+@description('Environment prefix used in the MOM_BOT_ENV env var and to derive KV secret names (e.g. \'prod\' → \'prod-database-url\'). Default \'prod\' preserves current single-env behavior.')
+param momBotEnv string = 'prod'
+
 // ---------------------------------------------------------------------------
 // Container Apps Environment (Consumption profile)
 // ---------------------------------------------------------------------------
@@ -177,7 +180,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
       secrets: [
         {
           name: 'database-url'
-          keyVaultUrl: '${keyVaultUri}secrets/prod-database-url'
+          keyVaultUrl: '${keyVaultUri}secrets/${momBotEnv}-database-url'
           identity: managedIdentityId
         }
       ]
@@ -207,7 +210,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             {
               name: 'MOM_BOT_ENV'
-              value: 'prod'
+              value: momBotEnv
             }
             {
               name: 'MOM_BOT_KEY_VAULT_NAME'

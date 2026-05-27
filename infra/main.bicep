@@ -39,6 +39,9 @@ param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 @description('Tenant ID — needed for Postgres AAD admin configuration.')
 param tenantId string = subscription().tenantId
 
+@description('Environment prefix used in MOM_BOT_ENV and to derive KV secret names (e.g. \'prod\' → \'prod-database-url\'). Default \'prod\' preserves current single-env behavior.')
+param momBotEnv string = 'prod'
+
 // ---------------------------------------------------------------------------
 // Resource group
 // ---------------------------------------------------------------------------
@@ -127,5 +130,6 @@ module containerApp 'modules/containerapp.bicep' = {
     keyVaultUri: kv.outputs.uri
     storageAccountName: storage.outputs.storageAccountName
     maxReplicas: 1
+    momBotEnv: momBotEnv
   }
 }

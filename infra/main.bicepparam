@@ -20,3 +20,7 @@ param containerAppName = 'ca-mom-bot'
 // where no image has been deployed yet.
 param containerImage = readEnvironmentVariable('CONTAINER_IMAGE', 'mcr.microsoft.com/k8se/quickstart:latest')
 
+// Environment prefix for KV secret names (e.g. 'prod' → 'prod-database-url').
+// Default 'prod' preserves current single-env behavior.
+param momBotEnv = 'prod'
+
