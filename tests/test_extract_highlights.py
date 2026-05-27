@@ -9,14 +9,13 @@ Fixture scenarios:
   2. No Highlights section — fallback description returned
   3. Multi-paragraph Highlights block
   4. Oversized Highlights block (>1500 chars) — truncated with ellipsis + link
-  5. Highlights block with emoji prefix (## 📣 Highlights)
+  5. Highlights block with emoji prefix (### 📣 Highlights)
   6. Highlights section followed immediately by another ## heading
   7. Highlights section at end of body (no following ## heading)
 """
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "extract-highlights.sh"
@@ -47,9 +46,7 @@ def run_script(body: str, tag: str = FALLBACK_TAG, url: str = FALLBACK_URL) -> s
         encoding="utf-8",
         check=False,
     )
-    assert result.returncode == 0, (
-        f"Script exited {result.returncode}; stderr: {result.stderr!r}"
-    )
+    assert result.returncode == 0, f"Script exited {result.returncode}; stderr: {result.stderr!r}"
     return result.stdout.replace("\r\n", "\n").strip()
 
 
@@ -61,12 +58,12 @@ BODY_WITH_HIGHLIGHTS = """\
 
 Some changelog detail.
 
-## Highlights
+### Highlights
 
 This release ships the Discord notification workflow.
 Members will now see an announcement when a new version is published.
 
-## Fixed
+### Fixed
 
 - Bug #123 squashed.
 """
@@ -113,7 +110,7 @@ def test_no_highlights_fallback_mentions_published():
 # 3. Multi-paragraph Highlights block
 # ---------------------------------------------------------------------------
 BODY_MULTI_PARA = """\
-## 📣 Highlights
+### 📣 Highlights
 
 First paragraph with some context about this release.
 
@@ -121,7 +118,7 @@ Second paragraph with more detail.
 
 Third paragraph wrapping it up.
 
-## Changed
+### Changed
 
 - Something changed.
 """
@@ -138,7 +135,7 @@ def test_multi_paragraph_highlights_all_captured():
 # 4. Oversized Highlights block (>1500 chars) — must truncate
 # ---------------------------------------------------------------------------
 LONG_LINE = "A" * 200 + "\n"
-BODY_OVERSIZED = "## Highlights\n\n" + LONG_LINE * 10 + "\n## Changed\n\n- x\n"
+BODY_OVERSIZED = "### Highlights\n\n" + LONG_LINE * 10 + "\n### Changed\n\n- x\n"
 # 10 * 201 chars = 2010 chars of content — well above the 1500 cap
 
 
@@ -167,12 +164,12 @@ def test_oversized_highlights_link_on_own_line():
 # 5. Highlights with emoji prefix
 # ---------------------------------------------------------------------------
 BODY_EMOJI_HIGHLIGHTS = """\
-## 📣 Highlights
+### 📣 Highlights
 
 - Feature A is now live.
 - Feature B shipped.
 
-## Details
+### Details
 
 Internal changes.
 """
@@ -193,9 +190,9 @@ def test_emoji_highlights_does_not_include_details_section():
 # 6. Highlights section followed immediately by another ## heading (no blank line)
 # ---------------------------------------------------------------------------
 BODY_TIGHT = """\
-## Highlights
+### Highlights
 Quick summary line.
-## Fixed
+### Fixed
 - fix 1
 """
 
@@ -214,11 +211,11 @@ def test_tight_highlights_does_not_bleed_into_fixed():
 # 7. Highlights at end of body (no following ## heading)
 # ---------------------------------------------------------------------------
 BODY_HIGHLIGHTS_LAST = """\
-## Changed
+### Changed
 
 - Something.
 
-## Highlights
+### Highlights
 
 End-of-body summary with no following section.
 """

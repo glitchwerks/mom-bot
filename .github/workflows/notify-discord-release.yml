@@ -46,6 +46,14 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate required secrets
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          if [ -z "${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}" ]; then
+            echo "::error::DISCORD_RELEASE_WEBHOOK_URL secret is not set. See RELEASING.md § Discord Highlights convention for setup instructions."
+            exit 1
+          fi
+
       - name: Checkout repository
         if: steps.guard.outputs.skip == 'false'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
@@ -141,14 +149,17 @@ jobs:
           )"
 
           # POST to Discord.  Fail the step on non-2xx so CI shows a red check
-          # rather than silently dropping the notification.
-          HTTP_STATUS="$(curl -s -o /dev/null -w "%{http_code}" \
+          # rather than silently dropping the notification.  Capture the response
+          # body so that on failure the error reason is visible in the workflow log.
+          RESPONSE_BODY="$(mktemp)"
+          HTTP_STATUS="$(curl -s -o "$RESPONSE_BODY" -w "%{http_code}" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
             "$DISCORD_WEBHOOK_URL")"
 
           if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
             echo "::error::Discord webhook returned HTTP $HTTP_STATUS — notification not delivered."
+            echo "Response body: $(cat "$RESPONSE_BODY")"
             exit 1
           fi
 
