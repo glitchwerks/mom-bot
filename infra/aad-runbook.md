@@ -455,7 +455,7 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-discord-token 
 
 ### Guild IDs — different per environment
 
-> **Bicep-managed since PR #N (issues #121, #236) — `prod-guild-id` is now
+> **Bicep-managed since PR #237 (issues #121, #236) — `prod-guild-id` is now
 > provisioned by `infra/main.bicep`. Do not run the `prod-guild-id` command
 > below by hand; edit `infra/main.bicepparam` (`param guildId`) instead and
 > redeploy. The `dev-guild-id` command remains manual (dev env is not
@@ -493,7 +493,7 @@ az keyvault secret set --vault-name kv-mombot-eastus2 --name prod-app-insights-c
 
 ### Reminder scheduler secrets — channel name and mention role (no Developer Mode required)
 
-> **Bicep-managed since PR #N (issues #121, #236) — `prod-reminder-channel-name`
+> **Bicep-managed since PR #237 (issues #121, #236) — `prod-reminder-channel-name`
 > and `prod-reminder-mention-role-name` are now provisioned by
 > `infra/main.bicep`. Do not run the `prod-*` commands below by hand; edit
 > `infra/main.bicepparam` (`param reminderChannelName` / `param

@@ -97,6 +97,7 @@ resource reminderChannelNameSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01
   name: '${momBotEnv}-reminder-channel-name'
   properties: {
     value: reminderChannelName
+    contentType: 'text/plain'
   }
 }
 
@@ -105,6 +106,7 @@ resource reminderMentionRoleNameSecret 'Microsoft.KeyVault/vaults/secrets@2023-0
   name: '${momBotEnv}-reminder-mention-role-name'
   properties: {
     value: reminderMentionRoleName
+    contentType: 'text/plain'
   }
 }
 
@@ -113,6 +115,7 @@ resource guildIdSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: '${momBotEnv}-guild-id'
   properties: {
     value: guildId
+    contentType: 'text/plain'
   }
 }
 

@@ -54,7 +54,9 @@ param reminderChannelName string
 @description('Discord role name to mention when reminders fire (e.g. \'Member\').')
 param reminderMentionRoleName string
 
-@description('Discord guild (server) snowflake ID for this environment. UNVERIFIED — confirm actual prod value before deploying (see infra/aad-runbook.md §8 Guild IDs).')
+@description('Discord guild (server) snowflake ID for this environment. Must be a 17–20 digit numeric string.')
+@minLength(17)
+@maxLength(20)
 param guildId string
 
 // ---------------------------------------------------------------------------
