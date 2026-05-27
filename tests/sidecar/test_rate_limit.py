@@ -359,3 +359,87 @@ class TestUnmeteredPaths:
         for _ in range(5):
             resp = client.get("/api/version")
             assert resp.status_code != 429, "GET /api/version must not be rate-limited"
+
+
+# ---------------------------------------------------------------------------
+# Total (aggregate) rate-limit fires across distinct IPs
+# ---------------------------------------------------------------------------
+
+
+class TestTotalRateLimit:
+    """Aggregate rate limit fires when total requests exceed the cap.
+
+    RATE_LIMIT_TOTAL is a shared budget across all source IPs.  This test
+    verifies that the 6th request returns 429 even though each request comes
+    from a distinct IP (so per-IP buckets never overflow).
+
+    This also validates that the custom XFF key function (Finding #2) reads
+    X-Forwarded-For correctly so each distinct header value is treated as a
+    distinct IP key.
+    """
+
+    def test_total_limit_fires_across_distinct_ips(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """6th request returns 429 when RATE_LIMIT_TOTAL=5/minute.
+
+        Each of the 6 requests carries a different X-Forwarded-For header.
+        The per-IP limit is set to 2/minute so that if the key function
+        ignores X-Forwarded-For and buckets all requests under one IP,
+        the 3rd request would hit the per-IP limit (not the total limit).
+        With the XFF key function working correctly, each request lands in
+        its own per-IP bucket (all under-limit) and only the aggregate fires
+        on the 6th request.
+
+        This validates both the aggregate-limit path and that the XFF key
+        function from Finding #2 reads X-Forwarded-For correctly.
+
+        Args:
+            monkeypatch: Pytest fixture for env var teardown.
+        """
+        # per-IP limit=2/minute (would fire at request 3 if XFF is ignored);
+        # total=5/minute (should fire at request 6 if XFF is read correctly).
+        client = _make_client(
+            per_ip="2/minute",
+            total="5/minute",
+            monkeypatch=monkeypatch,
+        )
+        _reset_limiter(client)
+
+        distinct_ips = [
+            f"192.0.2.{i}" for i in range(1, 7)
+        ]
+
+        # First 5 requests from distinct IPs must NOT be rate-limited.
+        # If XFF is not read, request 3 would 429 on per-IP (not total),
+        # proving the key function is broken.
+        for ip in distinct_ips[:5]:
+            resp = client.post(
+                "/api/internal/role-sync",
+                json=_ROLE_SYNC_PAYLOAD,
+                headers={
+                    "Authorization": f"Bearer {_VALID_KEY}",
+                    "X-Forwarded-For": ip,
+                },
+            )
+            assert resp.status_code != 429, (
+                f"Expected non-429 for request from {ip} "
+                f"(within per-IP limit), got {resp.status_code}. "
+                "If request 3+ fails here, the key function is not reading "
+                "X-Forwarded-For — all requests are sharing one IP bucket."
+            )
+
+        # 6th request from yet another distinct IP must be rate-limited by
+        # the aggregate RATE_LIMIT_TOTAL budget.
+        resp = client.post(
+            "/api/internal/role-sync",
+            json=_ROLE_SYNC_PAYLOAD,
+            headers={
+                "Authorization": f"Bearer {_VALID_KEY}",
+                "X-Forwarded-For": distinct_ips[5],
+            },
+        )
+        assert resp.status_code == 429, (
+            f"Expected 429 from aggregate total limit after 5 requests, "
+            f"got {resp.status_code}: {resp.text}"
+        )

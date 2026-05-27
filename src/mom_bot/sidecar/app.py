@@ -126,6 +126,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from io import BufferedIOBase
 from typing import Any, Literal, cast
 from weakref import WeakValueDictionary
@@ -139,7 +140,7 @@ from pydantic import BaseModel, model_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIASGIMiddleware
-from slowapi.util import get_remote_address
+from slowapi.wrappers import LimitGroup
 from sqlalchemy.orm import Session, sessionmaker
 
 from mom_bot import __version__ as _pkg_version
@@ -150,6 +151,91 @@ from mom_bot.sidecar.models import MemberRoleSyncState
 __all__ = ["build_app"]
 
 _logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Rate-limit helpers — issue #209
+# ---------------------------------------------------------------------------
+
+# Regex for the slowapi limit string syntax: <positive-int>/<unit>
+# Valid units: second, minute, hour, day (singular only, per slowapi docs).
+_RATE_LIMIT_PATTERN: re.Pattern[str] = re.compile(
+    r"^\d+/(second|minute|hour|day)$"
+)
+
+
+def _validate_rate_limit_env(name: str, value: str) -> None:
+    """Validate a slowapi limit string read from an environment variable.
+
+    Rejects malformed values at module load time so the process fails fast
+    on startup rather than crashing on the first incoming request.
+
+    Args:
+        name: The environment variable name (used in the error message).
+        value: The value to validate (e.g. ``"60/minute"``).
+
+    Raises:
+        ValueError: If ``value`` does not match ``<integer>/<unit>`` where
+            unit is one of ``second``, ``minute``, ``hour``, ``day``.
+    """
+    if not _RATE_LIMIT_PATTERN.match(value):
+        raise ValueError(
+            f"Invalid rate-limit format in env var {name!r}: {value!r}. "
+            "Expected '<positive-integer>/<unit>' where unit is one of: "
+            "second, minute, hour, day. "
+            f"Example: '60/minute'."
+        )
+
+
+def _get_real_ip(request: Request) -> str:
+    """Extract the real client IP from an incoming request.
+
+    Reads the ``X-Forwarded-For`` header (set by Azure Container Apps
+    ingress) and returns the first comma-separated entry, which is the
+    original client IP.  Falls back to ``request.client.host`` if the
+    header is absent, then to the string ``"unknown"`` if the ASGI scope
+    does not carry a client address.
+
+    Note: X-Forwarded-For is forgeable by the caller of the CAE ingress
+    URL, but ``RATE_LIMIT_TOTAL`` backstops per-IP limits — the real
+    client never directly reaches the container in CAE, so the ingress
+    proxy is the authoritative source of client identity for rate-limiting
+    purposes.
+
+    Args:
+        request: The incoming :class:`~starlette.requests.Request`.
+
+    Returns:
+        A string representing the best available client IP address.
+    """
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    if request.client is not None:
+        return request.client.host
+    return "unknown"
+
+
+def _global_rate_limit_key(request: Request) -> str:  # noqa: ARG001
+    """Return a constant key so all requests share the same aggregate bucket.
+
+    Used as the key function for ``RATE_LIMIT_TOTAL`` so the total limit
+    is truly aggregate across all source IPs rather than per-IP.  slowapi's
+    ``application_limits`` parameter uses the limiter's default key_func,
+    which would make every IP get its own "total" bucket — incorrect for a
+    shared cap.  By wiring this constant key function directly into the
+    :class:`~slowapi.wrappers.LimitGroup`, a single counter is shared
+    across all callers.
+
+    Args:
+        request: The incoming :class:`~starlette.requests.Request`
+            (unused; present so the signature matches slowapi's key_func
+            protocol).
+
+    Returns:
+        The string ``"global"`` unconditionally.
+    """
+    return "global"
+
 
 # ---------------------------------------------------------------------------
 # Per-discord_id asyncio lock registry
@@ -405,11 +491,34 @@ def build_app(
     _rate_limit_per_ip: str = os.environ.get("RATE_LIMIT_PER_IP", "60/minute")
     _rate_limit_total: str = os.environ.get("RATE_LIMIT_TOTAL", "200/minute")
 
+    # Validate both limit strings at startup so misconfiguration surfaces
+    # immediately (fast-fail) rather than on the first incoming request.
+    _validate_rate_limit_env("RATE_LIMIT_PER_IP", _rate_limit_per_ip)
+    _validate_rate_limit_env("RATE_LIMIT_TOTAL", _rate_limit_total)
+
+    # Per-IP limit uses _get_real_ip (reads X-Forwarded-For from CAE ingress).
+    # Aggregate total limit uses _global_rate_limit_key (constant "global")
+    # so all source IPs share one counter.  slowapi's application_limits
+    # constructor param would use the limiter's key_func, giving every IP its
+    # own "global" bucket — wrong for a shared cap — so we append the
+    # LimitGroup directly after construction.
     _limiter = Limiter(
-        key_func=get_remote_address,
+        key_func=_get_real_ip,
         default_limits=[_rate_limit_per_ip],
-        application_limits=[_rate_limit_total],
         headers_enabled=True,
+    )
+    _limiter._application_limits.append(  # type: ignore[attr-defined]
+        LimitGroup(
+            _rate_limit_total,
+            _global_rate_limit_key,
+            "global",
+            False,
+            None,
+            None,
+            None,
+            1,
+            False,
+        )
     )
 
     # Attach to both the parent app (for test access) and the sub-app
