@@ -15,6 +15,7 @@ Design decisions:
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -192,3 +193,37 @@ async def test_mom_bot_close_calls_siege_client_close() -> None:
         await bot.close()
 
     mock_siege.close.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — make_client logs the resolved siege-web base URL at INFO
+# ---------------------------------------------------------------------------
+
+
+def test_make_client_logs_siege_web_base_url(caplog: pytest.LogCaptureFixture) -> None:
+    """make_client() must log the resolved siege-web base URL at INFO level.
+
+    Passes a stub SiegeWebClient whose ``base_url`` is set to a known value,
+    then asserts a record matching
+    ``"Configured siege-web base URL: <url>"`` appears on the
+    ``mom_bot.main`` logger at INFO.
+
+    This covers the observability requirement from mom-bot#210: operators
+    must be able to spot cross-environment URL misrouting within 30 s of
+    reading cold-start logs.
+    """
+    from mom_bot.main import make_client
+
+    stub_url = "https://dev.rslsiege.com"
+    mock_siege = MagicMock()
+    mock_siege.base_url = stub_url
+
+    with caplog.at_level(logging.INFO, logger="mom_bot.main"):
+        make_client(siege_client=mock_siege)
+
+    expected_message = f"Configured siege-web base URL: {stub_url}"
+    matching = [r for r in caplog.records if r.getMessage() == expected_message]
+    assert matching, (
+        f"Expected INFO log {expected_message!r} on mom_bot.main; "
+        f"got records: {[r.getMessage() for r in caplog.records]!r}"
+    )

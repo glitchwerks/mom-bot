@@ -490,6 +490,7 @@ client.SiegeWebClient` to use for the post-condition commands.  When
             base_url=load_secret("siege-web-url"),
             token=load_secret("siege-web-bot-token"),
         )
+    _logger.info("Configured siege-web base URL: %s", siege_client.base_url)
     # Store on the bot so MomBot.close() can close the aiohttp session.
     client._siege_client = siege_client
     _register_post_conditions(tree=client.tree, siege_client=siege_client)
