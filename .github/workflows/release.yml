@@ -37,22 +37,29 @@ jobs:
       - name: Preflight checks
         id: preflight
         run: |
-          # Derive version from tag ref (strips "refs/tags/v" prefix)
+          # Derive version from tag ref (strips "refs/tags/v" prefix).
+          # IMPORTANT: TAG and VERSION are derived from a caller-controlled git ref
+          # (anyone with push access can choose the tag name). They MUST be validated
+          # BEFORE any use that interpolates them into a double-quoted shell context —
+          # including the diagnostic `echo` that announces them. An injected
+          # `v1.0.0"; whoami; echo "` would execute on first interpolation, before
+          # any validation block placed AFTER the echo could run.
           TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
-          echo "Tag: $TAG  Version: $VERSION"
 
-          # Validate VERSION matches a strict semver shape before it is used in any
-          # subsequent shell expansion (defense-in-depth: tag names are caller-controlled,
-          # so an attacker with push access could craft a tag like
-          # `v1.0.0"; whoami; echo "` that would inject commands when interpolated
-          # into double-quoted strings later in this workflow).  We reject anything
-          # that is not a strict semver core (X.Y.Z) with optional PEP 440 / semver
-          # pre-release and build-metadata suffixes composed of safe characters only.
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
-            echo "::error::Invalid version format: $VERSION (expected semver, e.g. 1.0.0 or 1.0.0-rc.1)"
+          # Validate VERSION matches a strict semver shape with safe characters only.
+          # Use printf '%s\n' instead of echo so the value is passed verbatim as a
+          # format string argument (no embedded interpolation that an attacker-shaped
+          # value could break out of). grep then reads from stdin, where the value
+          # is a data stream, not shell input.
+          if ! printf '%s\n' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
+            # Diagnostic also uses printf to avoid re-interpolating the unsafe value.
+            printf '::error::Invalid version format: %s (expected semver, e.g. 1.0.0 or 1.0.0-rc.1)\n' "$VERSION"
             exit 1
           fi
+
+          # Now safe to use TAG/VERSION in normal shell expansion.
+          echo "Tag: $TAG  Version: $VERSION"
 
           # Determine pre-release: any version containing a hyphen is a pre-release
           if echo "$VERSION" | grep -q '-'; then
