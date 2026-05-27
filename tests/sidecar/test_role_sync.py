@@ -971,23 +971,40 @@ class TestConcurrentRequestSerialization:
         result in exactly one apply_day_role invocation (exact-replay path
         for the second request) and both return 200.
 
-        The mock uses an asyncio.Event to ensure both coroutines are
-        inside the "critical section" before either completes, maximising
-        the window in which a real race could occur.  With the lock in
-        place, they are serialized and only one reaches apply_day_role.
-        """
-        newer_at = "2026-05-14T21:00:00.000Z"
-        older_at = "2026-05-14T09:00:00.000Z"
+        Both requests carry identical (discord_id, assigned_at, action,
+        day_number) so the outcome is deterministic regardless of which
+        coroutine acquires the lock first:
 
-        newer_payload = {
+        - First acquirer: finds no row, calls apply_day_role (counter += 1),
+          UPSERTs the result, releases the lock.
+        - Second acquirer: reads the row written by the first, hits the
+          exact-replay branch, returns the stored response without calling
+          apply_day_role.
+
+        The mock adds ``await asyncio.sleep(0)`` so the event loop can
+        deliver the second request's ASGI events up to the lock-wait point
+        before the first request's handler completes.  This maximises the
+        window in which a real race could occur; with the per-discord_id
+        lock in place the second request is serialized and the total call
+        count is always exactly 1.
+
+        Prior to this fix the test used two different assigned_at values
+        (newer/older).  The older-first scheduling path caused the newer
+        request to become a fresh write rather than a stale_write, yielding
+        total_calls == 2 and a flaky failure on loaded CI runners (issue
+        #223).
+        """
+        shared_at = "2026-05-14T21:00:00.000Z"
+
+        payload_a = {
             **_VALID_ASSIGN_PAYLOAD,
-            "assigned_at": newer_at,
-            "correlation_id": "newer-concurrent",
+            "assigned_at": shared_at,
+            "correlation_id": "concurrent-a",
         }
-        older_payload = {
+        payload_b = {
             **_VALID_ASSIGN_PAYLOAD,
-            "assigned_at": older_at,
-            "correlation_id": "older-concurrent",
+            "assigned_at": shared_at,
+            "correlation_id": "concurrent-b",
         }
 
         apply_result = RoleSyncResult(status="applied", added=[300], removed=[])
@@ -1001,6 +1018,11 @@ class TestConcurrentRequestSerialization:
 
             async def _mock_apply(*args: Any, **kwargs: Any) -> RoleSyncResult:
                 call_counter.append(1)
+                # Yield to the event loop so the second request's ASGI
+                # events can be processed up to the lock-wait point before
+                # this handler completes.  This maximises scheduling
+                # interleaving without introducing a real timing dependency.
+                await asyncio.sleep(0)
                 return apply_result
 
             # Rebuild app inside the coroutine so the patch target resolves
@@ -1017,12 +1039,12 @@ class TestConcurrentRequestSerialization:
                     r1, r2 = await asyncio.gather(
                         ac.post(
                             "/api/internal/role-sync",
-                            json=newer_payload,
+                            json=payload_a,
                             headers=_auth_headers(),
                         ),
                         ac.post(
                             "/api/internal/role-sync",
-                            json=older_payload,
+                            json=payload_b,
                             headers=_auth_headers(),
                         ),
                     )
@@ -1032,20 +1054,19 @@ class TestConcurrentRequestSerialization:
 
         assert s1 == 200, f"First request status: {s1}"
         assert s2 == 200, f"Second request status: {s2}"
-        # With the lock in place the older-assigned_at request either sees
-        # the row written by the newer one (stale_write) or becomes an
-        # exact replay — in both cases apply_day_role is called exactly once.
+        # With the lock in place the second request hits the exact-replay
+        # branch and apply_day_role is called exactly once total.
         total_calls = len(call_counter)
         assert total_calls == 1, (
             f"apply_day_role called {total_calls} times; "
             "expected exactly 1 (lock should serialize concurrent requests)"
         )
 
-        # The stored row must reflect the newer assigned_at.
+        # The stored row must reflect the shared assigned_at.
         with session_factory() as s:
             row = s.get(MemberRoleSyncState, str(_DISCORD_ID))
         assert row is not None
-        assert row.last_assigned_at == newer_at
+        assert row.last_assigned_at == shared_at
 
 
 # ---------------------------------------------------------------------------
