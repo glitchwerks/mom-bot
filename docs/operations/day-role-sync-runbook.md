@@ -56,6 +56,23 @@ Replace `true` with `false` to disable. The Container App creates a new revision
 Follow this order when enabling the feature for the first time in a given environment. Do not
 skip steps — the sequence exists to catch configuration errors before live traffic touches Discord.
 
+0. **Pre-deployment sanity (run before everything else).**
+
+   ```bash
+   az containerapp show -g <rg> -n ca-mom-bot \
+     --query "{image:properties.template.containers[0].image, ingress:properties.configuration.ingress}" -o json
+   ```
+
+   Expected:
+   - `image` does NOT contain `mcr.microsoft.com/k8se/quickstart` (placeholder)
+   - `ingress` is a non-null object with `fqdn`, `external: true`, `targetPort: 8001`
+   - `ingress.ipSecurityRestrictions[]` includes the expected siege-web CAE egress IPs
+
+   If `image` IS the placeholder OR `ingress` is null: stop. The receiver
+   route is not deployed; fix the deploy first (run `Deploy (mom-bot)` and
+   `Deploy infra (Bicep apply)` workflows) and re-run Step 0 before
+   proceeding.
+
 1. **Flag off.** Confirm `DAY_ROLE_SYNC_ENABLED=false` on siege-web (this is the default and
    should already be the case).
 

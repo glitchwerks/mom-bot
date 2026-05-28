@@ -19,6 +19,11 @@ percentile passes.
 
 ## Before you start
 
+**Pre-deployment check:** Before proceeding, complete Step 0 of the runbook
+(`docs/operations/day-role-sync-runbook.md` § 1 — "Recommended flip sequence", Step 0). That step
+confirms `ca-mom-bot` is running a real image (not the `quickstart` placeholder) and that ingress
+is configured correctly. If Step 0 fails, do not continue here.
+
 1. Confirm `DAY_ROLE_SYNC_ENABLED` is currently `false` on the siege-web Container App
    (Azure Portal → Container Apps → siege-web → Environment Variables). The flag is your rollback
    switch — leave it off until step 1 of Scenario 1 below.
