@@ -97,7 +97,7 @@ Endpoint shape:
 | **Versioning track** | Own product (`mom-bot v0.x`); runtime coupled to siege-web by design | Clean release-cadence separation, but operationally tied to siege-web. Don't oversell the separability |
 | **Discord scope** | Self-service reads + post-preference self-service writes + reminder management. No operator-ops, no admin-broadcast | Narrow, honest sizing. Web UI keeps owning operator workflows |
 | **Reminder JSON state migration** | NOT migrated; cutover timing rule (Epic 4) prevents duplicates | Migrating `reminders_sent.json` across machines / RGs / processes costs more than the bounded one-time risk of a duplicate ping after cutover |
-| **Azure region** | `eastus2` | Cohabitate with siege-web (lower sidecar latency); reminder-bot's `centralus` will be torn down at Epic 4 step 7 anyway, so no upside to inheriting that region. Locked `2026-05-08` |
+| **Azure region** | mom-bot: `eastus2`; siege-web bot: `westus` (cross-region) | mom-bot's Container App environment `cae-mom-bot-eastus2` is in East US 2. Siege-web's bot Container App environment `siege-web-cae-prod-yf3fl2t3yxmtk` is in West US (default domain `salmondesert-a9a40ca1.westus.azurecontainerapps.io`). The original 2026-05-08 entry assumed both were in `eastus2`; this was incorrect — see correction note in Pre-Epic-0 § B below. Cross-region RTT (~50–70ms) is a documented design input for Epic #128. |
 
 ## Slash command surface (concrete list)
 
@@ -195,6 +195,17 @@ The reminder-bot lives on an Azure **VM** (not a managed container/function serv
 Document findings in `pre-epic-0-checklist.md` (or as a tracked GitHub issue).
 
 **Owner:** repository admin / @cbeaulieu-gt (only person with confirmed Discord developer portal + cross-RG Azure access).
+
+**Correction (2026-05-28):** The 2026-05-08 resolution above, and the original Confirmed design decisions table entry, incorrectly asserted that both mom-bot and siege-web's bot environment were colocated in `eastus2`. Verified 2026-05-21:
+
+| App | Container Apps Environment | Region |
+|---|---|---|
+| `ca-mom-bot` (RG `mom-bot`) | `cae-mom-bot-eastus2` | East US 2 |
+| `siege-web-bot-prod` (RG `siege-web-prod`) | `siege-web-cae-prod-yf3fl2t3yxmtk` | **West US** |
+
+Siege-web bot env default domain: `salmondesert-a9a40ca1.westus.azurecontainerapps.io`.
+
+The topology is cross-region, not colocated. The ~50–70ms cross-region RTT became a documented design input for Epic #128. The transport choice (D-2) and ingress allowlist (B-8) in the Phase 1 scoping plan flow from this finding. See the Epic #128 verification comment at https://github.com/glitchwerks/mom-bot/issues/128#issuecomment-4509085682 and `docs/superpowers/plans/2026-05-20-mom-bot-epic-128-phase-1-scoping.md` §2 and §8 for the authoritative source.
 
 ### Epic 0 — Skeleton (mom_bot side only) + CI/CD baseline
 
@@ -409,7 +420,7 @@ These don't shape the framework but need answers before specific epics begin:
 5. **Tank-week externally-deleted handling** — when SQLite row exists but Discord event was deleted by admin via portal, should next tick alert or auto-recreate? Default: alert + manual recreate. Confirm.
 6. **Reminder-bot's exact RG / resource name** — Pre-Epic-0 deliverable; needed for the cutover runbook step 2 + 7
 7. **Repo visibility** (public / private / org-internal) — affects CI secret strategy in Epic 0
-8. **Azure region** — ~~same as siege-web (East US 2) or different?~~ **Resolved `2026-05-08`: `eastus2`** (see Confirmed design decisions table). Cohabitate with siege-web; reminder-bot's `centralus` is being torn down regardless
+8. **Azure region** — ~~same as siege-web (East US 2) or different?~~ ~~**Resolved `2026-05-08`: `eastus2`** (see Confirmed design decisions table). Cohabitate with siege-web; reminder-bot's `centralus` is being torn down regardless~~ **Corrected `2026-05-28`: cross-region topology.** Mom-bot deploys in East US 2 (`cae-mom-bot-eastus2`); siege-web's bot environment is in West US (`siege-web-cae-prod-yf3fl2t3yxmtk`). The original `eastus2`-colocated assumption was false. See correction note in Pre-Epic-0 § B above.
 9. **Siege-web service token rotation cadence** — how often, and what's the rotation mechanism (Key Vault reference + Container App restart)?
 10. **App Insights instance shape** — separate (recommended for blast-radius isolation) or shared with siege-web (one-pane observability)?
 11. **Reminder schema timezone-awareness** — UTC-only (today's behavior) or guild-local? Decide before Epic 1 schema lands
