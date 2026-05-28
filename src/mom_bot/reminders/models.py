@@ -83,9 +83,7 @@ class Reminder(Base):
     """
 
     __tablename__ = "reminders"
-    __table_args__ = (
-        CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),
-    )
+    __table_args__ = (CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
