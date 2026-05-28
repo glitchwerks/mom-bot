@@ -377,7 +377,7 @@ def build_app(
     ``guild``, and ``session_factory`` — all four are supplied at construction
     time so the same factory can be used in tests (with an in-memory DB and
     fake objects) and in production (with a live Discord gateway and a
-    file-backed SQLite DB).
+    Postgres database).
 
     Endpoints registered:
 

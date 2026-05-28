@@ -68,8 +68,8 @@ class Reminder(Base):
         weekday: Python ``date.weekday()`` semantics — Mon=0, Sun=6. Matches
             the source system convention at ``clan_reminders.py:L17``.
         fire_time_utc: Wall-clock UTC time at which the reminder fires,
-            constrained to minute-boundary values (seconds = 0). Stored as a
-            SQLite TEXT column in ``HH:MM:SS`` format.
+            constrained to minute-boundary values (seconds = 0). Stored as
+            ``HH:MM:SS`` per the ``ck_fire_time_no_seconds`` CHECK constraint.
         message_template: The Discord message body. Currently a static string
             (Epic 3 may add template substitution).
         role_mention_id: Optional Discord role snowflake to ping at fire
