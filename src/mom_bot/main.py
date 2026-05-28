@@ -24,7 +24,7 @@ Session factory
 :func:`mom_bot.db.build_session_factory`, which constructs a SQLAlchemy
 :class:`sessionmaker` from the ``MOM_BOT_DATABASE_URL`` environment variable.
 In dev, the variable may be omitted and the code falls back to a local SQLite
-file ``./mom_bot.db``.  In production, ``MOM_BOT_DATABASE_URL`` **must** be
+file ``./mom-bot.db``.  In production, ``MOM_BOT_DATABASE_URL`` **must** be
 set to a Postgres URL; AAD-token injection is applied automatically.
 Migrations are applied by CI before deploy (Phase 3, #91) — not at bot
 startup.
