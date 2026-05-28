@@ -158,7 +158,7 @@ Re-inviting the bot with a corrected bitfield is safe:
 - [ ] After first bot startup, the `day_role_map` table has one row per attack day with
   `discord_role_id` matching the actual Discord role snowflakes in the guild
 
-The seed runs automatically on startup (sub-issue #62). To verify, connect to the SQLite database
+The seed runs automatically on startup (sub-issue #62). To verify, connect to the database
 and run:
 
 ```sql

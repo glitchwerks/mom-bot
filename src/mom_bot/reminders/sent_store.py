@@ -1,6 +1,6 @@
 """ReminderSentStore — atomic per-day idempotency log for the scheduler.
 
-Wraps the ``reminder_sent`` SQLite table and provides three primitives:
+Wraps the ``reminder_sent`` database table and provides three primitives:
 
 - :meth:`ReminderSentStore.mark_sent` — claim a (reminder_id, date) slot
   via INSERT; returns ``True`` on success, ``False`` on UNIQUE collision.
@@ -8,7 +8,7 @@ Wraps the ``reminder_sent`` SQLite table and provides three primitives:
   tick can retry (used only for transient Discord errors, per plan § 5).
 - :meth:`ReminderSentStore.was_sent` — read-only membership check.
 
-The atomic primitive is "INSERT and catch IntegrityError".  The SQLite
+The atomic primitive is "INSERT and catch IntegrityError".  The database
 UNIQUE constraint on ``(reminder_id, fire_date_utc)`` serialises concurrent
 inserts from any overlapping scheduler instances — the loser sees
 ``IntegrityError`` and skips the Discord send (plan § 4 Concurrency note).
@@ -38,7 +38,7 @@ class ReminderSentStore:
     Attributes:
         _session: The SQLAlchemy ``Session`` used for all database
             operations. Callers must ensure it is bound to the correct
-            SQLite engine.
+            database engine.
     """
 
     def __init__(self, session: Session) -> None:

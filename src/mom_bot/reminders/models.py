@@ -67,9 +67,12 @@ class Reminder(Base):
             every scheduler tick can send directly without a name lookup.
         weekday: Python ``date.weekday()`` semantics — Mon=0, Sun=6. Matches
             the source system convention at ``clan_reminders.py:L17``.
-        fire_time_utc: Wall-clock UTC time at which the reminder fires,
-            constrained to minute-boundary values (seconds = 0). Stored as a
-            SQLite TEXT column in ``HH:MM:SS`` format.
+        fire_time_utc: Wall-clock UTC time at which the reminder fires.
+            Stored as ``HH:MM:SS``; constrained to minute-boundary values
+            (seconds = 0) by the ``ck_fire_time_no_seconds`` CHECK constraint
+            created in migration 0002. The constraint is dialect-aware
+            (SQLite ``strftime`` vs Postgres ``EXTRACT``) and lives only in
+            the database — there is no ORM-level mirror.
         message_template: The Discord message body. Currently a static string
             (Epic 3 may add template substitution).
         role_mention_id: Optional Discord role snowflake to ping at fire
@@ -80,13 +83,7 @@ class Reminder(Base):
     """
 
     __tablename__ = "reminders"
-    __table_args__ = (
-        CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),
-        CheckConstraint(
-            "CAST(strftime('%S', fire_time_utc) AS INTEGER) = 0",
-            name="ck_fire_time_no_seconds",
-        ),
-    )
+    __table_args__ = (CheckConstraint("weekday >= 0 AND weekday <= 6", name="ck_weekday"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
