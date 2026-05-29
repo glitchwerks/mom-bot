@@ -28,6 +28,11 @@ echo "[migrate] acquiring Entra access token for Postgres..."
 # azure-identity handles IMDS retries and exponential back-off internally.
 TOKEN=$(/app/.venv/bin/python -m mom_bot.migrations.acquire_token)
 
+if [ -z "$TOKEN" ]; then
+    echo "[migrate] ERROR: failed to acquire Entra token"
+    exit 1
+fi
+
 echo "[migrate] token acquired (length=${#TOKEN})"
 
 # Build the Postgres URL.  The username is the MI display name (mi-mom-bot).
