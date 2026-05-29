@@ -17,8 +17,8 @@ skills_relevant:
 
 # Spec — Run Postgres migrations as a Container Apps Job under `mi-mom-bot`
 
-**Issue:** [glitchwerks/mom-bot#241](https://github.com/glitchwerks/mom-bot/issues/241)
-**Blocks:** [glitchwerks/mom-bot#103](https://github.com/glitchwerks/mom-bot/issues/103)
+**Issue:** [glitchwerks/rsl-mom-bot#241](https://github.com/glitchwerks/rsl-mom-bot/issues/241)
+**Blocks:** [glitchwerks/rsl-mom-bot#103](https://github.com/glitchwerks/rsl-mom-bot/issues/103)
 
 ---
 
@@ -42,7 +42,7 @@ Issue #241 was opened to investigate an alternative surfaced during devops revie
 
 **Current Postgres Entra admins** (`infra/scripts/create-entra-admins.sh:L44`): both `mi-mom-bot` and `mom-bot-gha` are registered as Entra admins on the Postgres Flexible Server. Both hold full DDL/DML authority across all user databases on the server.
 
-**What #103 proposes:** create `mom-bot-gha-migrate` as a second SP with a separate federated credential and GHA environment `prod-migrate`; grant it Postgres Entra admin; strip the Postgres admin grant from `mom-bot-gha`. See the #103 spec (`docs/superpowers/specs/2026-05-27-103-fic-split.md`) for the full five-phase plan.
+**What #103 proposes:** create `mom-bot-gha-migrate` as a second SP with a separate federated credential and GHA environment `prod-migrate`; grant it Postgres Entra admin; strip the Postgres admin grant from `mom-bot-gha`. The full five-phase plan is tracked in [glitchwerks/rsl-mom-bot#103](https://github.com/glitchwerks/rsl-mom-bot/issues/103).
 
 ---
 
@@ -338,7 +338,7 @@ Today's migrate step streams alembic output directly in the GHA log via containe
 
 ## 8. Acceptance Criteria
 
-Per [glitchwerks/mom-bot#241](https://github.com/glitchwerks/mom-bot/issues/241):
+Per [glitchwerks/rsl-mom-bot#241](https://github.com/glitchwerks/rsl-mom-bot/issues/241):
 
 1. Investigation report exists documenting all ten research questions with citations.
 2. A decision is recorded: accept or reject the UAMI Container Apps Job pattern for migrations.
