@@ -373,23 +373,41 @@ GHA SP bootstrap roles (`Key Vault Secrets Officer`, `Container Apps Contributor
 ## Step 5.5 — Create Entra admins on Postgres (post-deploy)
 
 After `az deployment sub create` completes successfully against `infra/main.bicep`,
-run the following to register `mi-mom-bot` and `mom-bot-gha` as Entra admins on the
-Postgres server. This step replaces the `administrators` resources that used to live
-in `infra/modules/postgres.bicep`; they were moved here because the ARM resource
+run the following to register `mi-mom-bot` as the Entra admin on the Postgres server.
+This step replaces the `administrators` resources that used to live in
+`infra/modules/postgres.bicep`; they were moved here because the ARM resource
 races against the server's post-provision Updating window (issue #106).
+
+> **Issue #255 (Phase 3):** `mom-bot-gha` is no longer registered as a Postgres
+> Entra admin. Migrations now run via the Container Apps Job `job-mom-bot-migrate`
+> under `mi-mom-bot` UAMI (issue #255). `mom-bot-gha` cannot connect to Postgres
+> directly from GHA runners — the Postgres firewall allows only CAE outbound IPs.
+> `GHA_SP_OBJECT_ID` and `GHA_SP_DISPLAY_NAME` are no longer required by the
+> script.
 
 ```bash
 RESOURCE_GROUP=mom-bot \
 POSTGRES_SERVER_NAME=<from main.bicepparam — e.g. pg-mombot-flkrgslirk53q> \
 UAMI_OBJECT_ID=$(az identity show -g mom-bot -n mi-mom-bot --query principalId -o tsv) \
 UAMI_DISPLAY_NAME=mi-mom-bot \
-GHA_SP_OBJECT_ID=$(az ad sp show --id $AZURE_CLIENT_ID --query id -o tsv) \
-GHA_SP_DISPLAY_NAME=mom-bot-gha \
 bash infra/scripts/create-entra-admins.sh
 ```
 
-The script is idempotent — safe to re-run. Phase 4 of #91 will fold this call
-into `deploy.yml` so operators do not need to run it by hand.
+The script is idempotent — safe to re-run.
+
+**If `mom-bot-gha` was previously registered as Entra admin** and you want to revoke
+that grant (optional cleanup), run:
+
+```bash
+PG_SERVER=<postgres-server-name>
+GHA_OID=$(az ad sp show --id <mom-bot-gha-app-id> --query id -o tsv)
+az postgres flexible-server microsoft-entra-admin delete \
+  -g mom-bot --server-name "$PG_SERVER" --object-id "$GHA_OID" --yes
+```
+
+This is a clean-up step only — the `job-mom-bot-migrate` Container Apps Job does
+not depend on `mom-bot-gha` being removed; it depends only on `mi-mom-bot` being
+present.
 
 ---
 
@@ -762,7 +780,7 @@ az deployment sub create `
 - [ ] Step 4.5 (one-time) — Custom role `Mom-bot GHA Subscription Deployer` created and assigned to `mom-bot-gha` at subscription scope
 - [ ] Step 4.6 (one-time) — `Role Based Access Control Administrator` granted to `mom-bot-gha` at RG scope with ABAC condition constraining assignable roles to KV Secrets User/Officer (see #167)
 - [ ] Step 5 — Bicep deployed successfully (parameter file validated with `az bicep build-params` first)
-- [ ] Step 5.5 — Entra admins created on Postgres via `infra/scripts/create-entra-admins.sh`
+- [ ] Step 5.5 — Entra admin (`mi-mom-bot` only) created on Postgres via `infra/scripts/create-entra-admins.sh` (issue #255: `mom-bot-gha` grant removed)
 - [ ] Step 6 — Repo variables set in GitHub
 - [ ] Step 7 — Grant yourself Key Vault Secrets Officer for seeding
 - [ ] Step 8 — Initial secrets seeded

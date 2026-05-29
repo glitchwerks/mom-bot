@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Idempotently create the two Entra admins on the mom-bot Postgres server.
-# Replaces the race-prone administrators resources that used to live in
-# infra/modules/postgres.bicep. See issue #106.
+# Idempotently register mi-mom-bot as the Entra admin on the mom-bot Postgres
+# server (issue #255: mom-bot-gha Postgres admin grant removed).
+#
+# Migrations now run via the Container Apps Job 'job-mom-bot-migrate' under
+# mi-mom-bot (UAMI), which is already registered as Entra admin here.
+# mom-bot-gha no longer needs Postgres admin authority — it cannot connect
+# to the database directly from GHA runners (CAE egress-only firewall rule).
 #
 # Required env vars:
-#   RESOURCE_GROUP                       (default: mom-bot)
-#   POSTGRES_SERVER_NAME                 (default: pg-mombot-flkrgslirk53q — match main.bicepparam)
-#   UAMI_OBJECT_ID, UAMI_DISPLAY_NAME    (the mi-mom-bot runtime identity)
-#   GHA_SP_OBJECT_ID, GHA_SP_DISPLAY_NAME (the mom-bot-gha federated SP)
+#   RESOURCE_GROUP      (default: mom-bot)
+#   POSTGRES_SERVER_NAME
+#   UAMI_OBJECT_ID      (mi-mom-bot principal ID)
+#   UAMI_DISPLAY_NAME   (mi-mom-bot)
 #
 # Caller (operator or deploy.yml) is responsible for setting these from
 # repo variables / Bicep outputs.
@@ -18,8 +22,6 @@ set -euo pipefail
 : "${POSTGRES_SERVER_NAME:?required}"
 : "${UAMI_OBJECT_ID:?required}"
 : "${UAMI_DISPLAY_NAME:?required}"
-: "${GHA_SP_OBJECT_ID:?required}"
-: "${GHA_SP_DISPLAY_NAME:?required}"
 
 # helper: idempotent admin-create. existence check first, then create if absent.
 ensure_admin () {
@@ -41,7 +43,6 @@ ensure_admin () {
     --type ServicePrincipal
 }
 
-ensure_admin "$UAMI_OBJECT_ID"   "$UAMI_DISPLAY_NAME"
-ensure_admin "$GHA_SP_OBJECT_ID" "$GHA_SP_DISPLAY_NAME"
+ensure_admin "$UAMI_OBJECT_ID" "$UAMI_DISPLAY_NAME"
 
-echo "Both Entra admins present on $POSTGRES_SERVER_NAME."
+echo "Entra admin present on $POSTGRES_SERVER_NAME."
