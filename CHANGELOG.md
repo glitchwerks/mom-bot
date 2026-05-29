@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - README: audit for staleness — Status, Roadmap, Database/Migrations, Project Structure, References sections refreshed to reflect v1.0 ship + v1.1 in progress (refs #249).
+- Runbook + secrets-inventory: resolve stale TBDs and "Epic 1+" placeholders (closes #249).
 
 ### Fixed
 

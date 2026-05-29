@@ -518,7 +518,8 @@ az containerapp update -g siege-web-dev -n siege-web-api-dev --set-env-vars DAY_
 
 **Prod:**
 ```
-az containerapp update -g <TODO: confirm prod resource name> -n <TODO: confirm prod resource name> --set-env-vars DAY_ROLE_SYNC_ENABLED=false
+az containerapp update -g <siege-web-prod-rg> -n <siege-web-api-prod> --set-env-vars DAY_ROLE_SYNC_ENABLED=false
+# Resource names live in glitchwerks/rsl-mom-apps infra — check that repo's Bicep params or deploy workflow for the prod RG and Container App names.
 ```
 
 Allow approximately 30 seconds for siege-web to roll out the new revision. Then confirm the flag

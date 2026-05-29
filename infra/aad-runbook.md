@@ -788,7 +788,7 @@ risks database corruption.
 
 EmptyDir (the default Container Apps ephemeral volume) loses all state on every
 revision swap — unacceptable for a database. PostgreSQL is the correct long-term
-answer (see Epic 1+, tracking issue TBD), but standing up a managed Postgres
+answer (see Epic #91, closed — decision-log extraction at [#91 comment](https://github.com/glitchwerks/mom-bot/issues/91#issuecomment-4569696957)), but standing up a managed Postgres
 instance is out of scope for the initial bot bringup. AzureFile Standard LRS
 gives a persistent, SMB-mountable file share for under $2/month with no managed
 database overhead. It is explicitly a **stopgap** — the `prod-database-url` KV
@@ -968,9 +968,9 @@ Run periodically to validate the recovery path is functional:
 
 The SQLite-on-AzureFile setup is a **temporary stopgap**. The production target
 is a managed PostgreSQL instance (Azure Database for PostgreSQL Flexible Server or
-equivalent). Migration is tracked under Epic 1+; the specific tracking issue is
-TBD (see follow-up issue "Track PostgreSQL migration epic (replaces
-SQLite-on-SMB stopgap)" tracked by issue #87, implemented in PR #92). The `prod-database-url` KV secret and
+equivalent). Migration was tracked under Epic #91 (closed) — the full plan
+was extracted to [#91 comment](https://github.com/glitchwerks/mom-bot/issues/91#issuecomment-4569696957)
+and the plan file was removed in PR #247. The `prod-database-url` KV secret and
 the `MOM_BOT_DATABASE_URL` env var are already wired to accept a PostgreSQL
 connection string — no application code change is required for the migration,
 only the secret value and the removal of the AzureFile volume wiring.
