@@ -439,6 +439,175 @@ This is a clean-up step only — the `job-mom-bot-migrate` Container Apps Job do
 not depend on `mom-bot-gha` being removed; it depends only on `mi-mom-bot` being
 present.
 
+### Cutover completion: reassign ownership before revoking mom-bot-gha
+
+> **When to run this.** The simple `delete` snippet above will fail with
+> `AadAuthPrincipalDropFailed` / `2BP01: role "mom-bot-gha" cannot be dropped
+> because some objects depend on it` if historical migrations created objects
+> owned by `mom-bot-gha`. Run the sequence below **before** retrying the delete.
+> Full design rationale and privilege-model analysis are in
+> [`docs/superpowers/plans/2026-05-29-261-postgres-role-cutover.md`](../docs/superpowers/plans/2026-05-29-261-postgres-role-cutover.md)
+> (refs #261).
+
+Set shell variables (bash):
+
+```bash
+RG=mom-bot
+PG_SERVER=pg-mombot-flkrgslirk53q
+PG_FQDN="${PG_SERVER}.postgres.database.azure.com"
+PG_DB=mom_bot
+ADMIN_USER='cmb_dev@outlook.com'   # the human Entra admin display/login name
+
+# mom-bot-gha object-id — verify before the destructive step (step 4 below):
+GHA_OID=6fcf4d62-e6da-4819-9667-234a55018fa2
+```
+
+Open a firewall rule for your workstation IP (see "Dev-laptop ad-hoc Postgres
+access" above for the full procedure):
+
+```bash
+MYIP=$(curl -s https://api.ipify.org)
+az postgres flexible-server firewall-rule create \
+  --resource-group "$RG" --name "$PG_SERVER" \
+  --rule-name "dev-cmb-261-cutover" \
+  --start-ip-address "$MYIP" --end-ip-address "$MYIP"
+```
+
+Acquire an Entra token and connect as the admin. The `azure_pg_admin`
+enhancement on Flexible Server lets any Entra admin run `REASSIGN OWNED`
+against nonrestricted roles without needing superuser or explicit
+`GRANT "mom-bot-gha" TO current_user` first:
+
+```bash
+export PGPASSWORD=$(az account get-access-token \
+  --resource-type oss-rdbms \
+  --query accessToken -o tsv)
+
+psql "host=${PG_FQDN} port=5432 dbname=${PG_DB} user=${ADMIN_USER} sslmode=require"
+```
+
+**Step 1 — Enumerate objects owned by `mom-bot-gha` (capture output as before-state):**
+
+```sql
+-- Tables, sequences, views, matviews owned by mom-bot-gha
+SELECT n.nspname AS schema, c.relname AS object, c.relkind AS kind
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_roles r     ON r.oid = c.relowner
+WHERE r.rolname = 'mom-bot-gha'
+ORDER BY 1, 3, 2;
+
+-- Schemas owned by mom-bot-gha (expected: none — public is owned by azure_pg_admin)
+SELECT nspname FROM pg_namespace n
+JOIN pg_roles r ON r.oid = n.nspowner
+WHERE r.rolname = 'mom-bot-gha';
+
+-- Functions / procedures owned by mom-bot-gha
+SELECT n.nspname AS schema, p.proname AS function
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+JOIN pg_roles r     ON r.oid = p.proowner
+WHERE r.rolname = 'mom-bot-gha'
+ORDER BY 1, 2;
+
+-- Types owned by mom-bot-gha
+SELECT n.nspname AS schema, t.typname AS type
+FROM pg_type t
+JOIN pg_namespace n ON n.oid = t.typnamespace
+JOIN pg_roles r     ON r.oid = t.typowner
+WHERE r.rolname = 'mom-bot-gha'
+ORDER BY 1, 2;
+
+-- Single-number guard: total owned-object count
+SELECT
+  (SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_proc  p JOIN pg_roles r ON r.oid=p.proowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_type  t JOIN pg_roles r ON r.oid=t.typowner WHERE r.rolname='mom-bot-gha' AND t.typtype != 'c')
+  -- typtype != 'c' excludes composite types already counted in pg_class above
+  AS gha_owned_count;
+```
+
+If `gha_owned_count` is non-zero (expected), continue. If it is zero, the
+plain `delete` above should already succeed — stop here and retry it.
+
+**Step 2 — Reassign ownership to `mi-mom-bot`:**
+
+```sql
+BEGIN;
+REASSIGN OWNED BY "mom-bot-gha" TO "mi-mom-bot";
+-- Do NOT add DROP OWNED — that would drop privileges/grants, not just ownership.
+COMMIT;
+```
+
+> If this returns `42501 permission denied`, the `azure_pg_admin` enhancement is
+> not active on this server image. Run the following fallback in the **same
+> session**, then re-run the `BEGIN…COMMIT` block:
+>
+> ```sql
+> GRANT "mom-bot-gha" TO current_user;
+> GRANT "mi-mom-bot"  TO current_user;
+> ```
+
+**Step 3 — Verify ownership transferred (count must be zero):**
+
+```sql
+SELECT
+  (SELECT count(*) FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_proc  p JOIN pg_roles r ON r.oid=p.proowner WHERE r.rolname='mom-bot-gha')
+  +
+  (SELECT count(*) FROM pg_type  t JOIN pg_roles r ON r.oid=t.typowner WHERE r.rolname='mom-bot-gha' AND t.typtype != 'c')
+  -- typtype != 'c' excludes composite types already counted in pg_class above
+  AS gha_owned_count_after;   -- MUST be 0
+
+-- Spot-check: alembic version table + a real table now owned by mi-mom-bot
+-- adjust table names to match what step 1 enumerated for this database
+SELECT n.nspname, c.relname, pg_get_userbyid(c.relowner) AS owner
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE c.relname IN ('alembic_version','reminders')
+ORDER BY 1,2;
+```
+
+`gha_owned_count_after` must be 0 before proceeding. If it is not zero,
+re-run step 1 to see what remains (likely a different database context) and
+repeat step 2 there. Exit psql (`\q`).
+
+**Step 4 — Confirm the object-id, then retry the Entra-admin revoke:**
+
+```bash
+# Resolve mom-bot-gha's object-id dynamically from Entra
+GHA_OID=$(az ad sp list --display-name mom-bot-gha --query "[0].id" -o tsv)
+echo "Resolved mom-bot-gha object-id: $GHA_OID"
+# Operator: confirm this equals 6fcf4d62-e6da-4819-9667-234a55018fa2 before proceeding
+
+# List current admins (before)
+az postgres flexible-server microsoft-entra-admin list \
+  -g "$RG" --server-name "$PG_SERVER" -o table
+
+# Revoke
+az postgres flexible-server microsoft-entra-admin delete \
+  -g "$RG" --server-name "$PG_SERVER" \
+  --object-id "$GHA_OID" --yes
+```
+
+**Step 5 — Verify the final admin list:**
+
+```bash
+az postgres flexible-server microsoft-entra-admin list \
+  -g "$RG" --server-name "$PG_SERVER" -o table
+# Expected remaining admins: mi-mom-bot (SP), cmb_dev (User). mom-bot-gha GONE.
+```
+
+Close the firewall rule:
+
+```bash
+az postgres flexible-server firewall-rule delete \
+  --resource-group "$RG" --name "$PG_SERVER" \
+  --rule-name "dev-cmb-261-cutover" --yes
+```
+
 ---
 
 ## Step 6 — Set GitHub repo variables
