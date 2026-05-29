@@ -2,7 +2,7 @@
 
 Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
 
-**Status:** Epic 0.4 in progress — secrets/AAD/KV Bicep + deploy workflow + config module added. Manual Azure provisioning required before deploy workflow can run (see `infra/aad-runbook.md`).
+**Status:** v1.0 shipped (2026-05-26) — full sidecar + reminder bot consolidation, interactive slash commands, PostgreSQL on Azure. v1.1 in progress ([milestone #3](https://github.com/glitchwerks/rsl-mom-bot/milestone/3)) — infra + documentation hardening: UAMI migration job, KV-secret parameterisation, ACA ingress audit, dead-mount cleanup, observability wire-up, plus a documentation correctness sweep. Manual Azure provisioning for new environments requires the AAD preflight steps in `infra/aad-runbook.md`.
 
 ## Documentation
 
@@ -13,15 +13,17 @@ Discord bot consolidating two existing bots — `siege-web`'s notifications side
 
 The plan defines 5 epics + 1 cross-cut + 1 pre-epic gate:
 
-| Phase | Scope |
-| --- | --- |
-| **Pre-Epic-0** | Discord application audit + reminder-bot deployment typing (gates Epic 0) |
-| **Epic 0** | Skeleton: new repo wiring, Discord client, App Insights, SQLite baseline, `/ping` health-check |
-| **Epic 1** | Reminder lift-and-shift (port from `I:\games\raid\siege\clan\`; JSON file → SQLite) |
-| **Epic 2** | Sidecar lift-and-shift (port `siege-web/bot/`'s 6 HTTP endpoints into mom_bot's service half) |
-| **Epic 2.5** | Siege-web cross-cut (`/me/preferences` endpoints + `X-Acting-Discord-Id` header support — lands in siege-web v1.2) |
-| **Epic 3** | Interactive slash commands (~13 commands across `/siege` and `/reminder` groups) |
-| **Epic 4** | Cutover (deploy to new Azure RG `mom-bot-prod`, retire siege-bot + old reminder-bot) |
+| Phase | Scope | Status |
+| --- | --- | --- |
+| **Pre-Epic-0** | Discord application audit + reminder-bot deployment typing (gates Epic 0) | Shipped (v1.0) |
+| **Epic 0** | Skeleton: new repo wiring, Discord client, App Insights, SQLite baseline, `/ping` health-check | Shipped (v1.0) |
+| **Epic 1** | Reminder lift-and-shift (port from `siege/clan/`; JSON file → SQLite) | Shipped (v1.0) |
+| **Epic 2** | Sidecar lift-and-shift (port `siege-web/bot/`'s 6 HTTP endpoints into mom_bot's service half) | Shipped (v1.0, #128) |
+| **Epic 2.5** | Siege-web cross-cut (`/me/preferences` endpoints + `X-Acting-Discord-Id` header support — lands in siege-web v1.2) | Open (siege-web v1.2) |
+| **Epic 2.6** | Day-role sync — `POST /api/internal/role-sync` + `mom_bot/roles/` service | Shipped (v1.0, #6) |
+| **Epic 3** | Interactive slash commands (`/post-conditions catalog`, `/post-conditions me`) | Shipped (v1.0) |
+| **Epic 4** | Cutover (deploy to Azure RG `mom-bot`, retire siege-bot + old reminder-bot) | Shipped (v1.0) |
+| **PostgreSQL migration** | Replace SQLite-on-SMB with Postgres Flexible Server + AAD token auth | Shipped (v1.0, #91) |
 
 See the framework plan for design decisions, scope locks, risks, and verification per epic.
 
@@ -126,8 +128,7 @@ right-click the server icon and copy the guild ID.
 ## Database / Migrations
 
 Mom-bot uses [Alembic](https://alembic.sqlalchemy.org/) for schema migrations backed by SQLAlchemy.
-The local dev default is SQLite; production and staging inject a different URL via the
-`MOM_BOT_DATABASE_URL` environment variable.
+The local dev default is SQLite (developer convenience — no Azure credentials needed for schema work); production uses a PostgreSQL Flexible Server (`pg-mombot-*` in resource group `mom-bot`). The active database is selected via the `MOM_BOT_DATABASE_URL` environment variable (see `docs/secrets-inventory.md` for the canonical secret names).
 
 **Apply all pending migrations:**
 
@@ -148,38 +149,67 @@ alembic upgrade head
 ```
 
 Set `MOM_BOT_DATABASE_URL` to override the default SQLite URL for prod/staging
-(e.g. `postgresql+psycopg2://user:pass@host/dbname`).
+(e.g. `postgresql+psycopg://user:pass@host/dbname` — the project uses psycopg v3; `psycopg2` is not installed).
 
 ## Project Structure
 
 ```
 mom-bot/
 ├── src/
-│   └── mom_bot/                   # Main package (src-layout)
-│       ├── __init__.py            # Package version
-│       ├── __main__.py            # `python -m mom_bot` entrypoint
-│       ├── main.py                # Discord client, intents, /ping command
-│       └── db/
-│           └── __init__.py        # SQLAlchemy DeclarativeBase (Base)
-├── migrations/                    # Alembic migration scripts
-│   ├── env.py                     # Wired to Base.metadata; reads MOM_BOT_DATABASE_URL
-│   ├── script.py.mako             # Migration file template
-│   └── versions/
-│       └── 2f03efc88bf2_baseline.py  # Empty baseline (sequence 0001)
-├── tests/
-│   ├── test_smoke.py              # Package importability smoke test
-│   └── test_alembic.py            # Alembic config and revision wiring test
-├── alembic.ini                    # Alembic config (local SQLite default)
-├── docs/                          # Design docs, framework plan
-├── pyproject.toml                 # PEP 621 metadata, tool configs
-├── Dockerfile                     # Container build (python:3.12-slim, non-root)
+│   └── mom_bot/                        # Main package (src-layout)
+│       ├── __init__.py                 # Package version
+│       ├── __main__.py                 # `python -m mom_bot` entrypoint
+│       ├── main.py                     # Discord client, intents, slash commands
+│       ├── config.py                   # MOM_BOT_ENV-aware config + KV secret load
+│       ├── db/
+│       │   └── __init__.py             # SQLAlchemy DeclarativeBase
+│       ├── health/
+│       │   ├── __init__.py
+│       │   └── liveness.py             # /health/* liveness/readiness probes
+│       ├── post_conditions/            # Siege post-conditions: grid layout, Discord views, slash commands
+│       │   ├── client.py
+│       │   ├── commands.py
+│       │   ├── discord_display.py
+│       │   ├── grid_layout.py
+│       │   ├── grouping.py
+│       │   └── views.py
+│       ├── reminders/                  # Reminder system (Epic 1 lift-and-shift)
+│       │   ├── __init__.py
+│       │   ├── models.py
+│       │   ├── scheduler.py
+│       │   ├── seed.py
+│       │   └── sent_store.py
+│       ├── roles/                      # Day-role sync (Epic 2.6)
+│       │   ├── __init__.py
+│       │   ├── models.py
+│       │   ├── seed.py
+│       │   └── service.py
+│       └── sidecar/                    # HTTP sidecar (Epic 2 lift-and-shift)
+│           ├── __init__.py
+│           ├── app.py
+│           ├── auth.py
+│           └── models.py
+├── migrations/                         # Alembic migration scripts
+│   ├── env.py                          # Wired to Base.metadata; reads MOM_BOT_DATABASE_URL
+│   ├── script.py.mako                  # Migration file template
+│   └── versions/                       # Migration history (baseline + 4 revisions)
+├── tests/                              # Pytest suite (unit + integration)
+│   ├── post_conditions/
+│   ├── roles/
+│   ├── sidecar/
+│   └── test_*.py                       # Top-level smoke, config, alembic, health tests
+├── alembic.ini                         # Alembic config (local SQLite default)
+├── docs/                               # Design docs, secrets inventory, framework plan
+├── infra/                              # Bicep templates + AAD runbook
+├── pyproject.toml                      # PEP 621 metadata, tool configs
+├── Dockerfile                          # Container build (python:3.12-slim, non-root)
 └── .dockerignore
 ```
 
 ## References
 
 - Framework plan: [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md)
-- Tracking issue: [#12 — Epic 0.1 repo scaffolding](https://github.com/glitchwerks/mom-bot/issues/12)
+- Active milestone: [mom-bot v1.1 — infra + doc hardening](https://github.com/glitchwerks/rsl-mom-bot/milestone/3)
 
 ## Versioning
 
