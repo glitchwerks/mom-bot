@@ -2,7 +2,7 @@
 
 Discord bot consolidating two existing bots — `siege-web`'s notifications sidecar and the reminder system from `I:\games\raid\siege\clan\` — into a single bot with interactive slash commands.
 
-**Status:** v1.0 shipped (2026-05-26) — full sidecar + reminder bot consolidation, interactive slash commands, PostgreSQL on Azure. v1.1 in progress ([milestone #3](https://github.com/glitchwerks/mom-bot/milestone/3)) — infra + documentation hardening: UAMI migration job, KV-secret parameterisation, ACA ingress audit, dead-mount cleanup, observability wire-up, plus a documentation correctness sweep. Manual Azure provisioning for new environments requires the AAD preflight steps in `infra/aad-runbook.md`.
+**Status:** v1.0 shipped (2026-05-26) — full sidecar + reminder bot consolidation, interactive slash commands, PostgreSQL on Azure. v1.1 in progress ([milestone #3](https://github.com/glitchwerks/rsl-mom-bot/milestone/3)) — infra + documentation hardening: UAMI migration job, KV-secret parameterisation, ACA ingress audit, dead-mount cleanup, observability wire-up, plus a documentation correctness sweep. Manual Azure provisioning for new environments requires the AAD preflight steps in `infra/aad-runbook.md`.
 
 ## Documentation
 
@@ -209,7 +209,7 @@ mom-bot/
 ## References
 
 - Framework plan: [`docs/superpowers/plans/2026-05-08-mom-bot-framework.md`](docs/superpowers/plans/2026-05-08-mom-bot-framework.md)
-- Active milestone: [mom-bot v1.1 — infra + doc hardening](https://github.com/glitchwerks/mom-bot/milestone/3)
+- Active milestone: [mom-bot v1.1 — infra + doc hardening](https://github.com/glitchwerks/rsl-mom-bot/milestone/3)
 
 ## Versioning
 
