@@ -61,5 +61,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/mom-bot/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/glitchwerks/mom-bot/releases/tag/v1.0.0
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/glitchwerks/rsl-mom-bot/releases/tag/v1.0.0

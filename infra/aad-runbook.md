@@ -399,9 +399,9 @@ These are **Variables** (not Secrets — they are non-sensitive OIDC identifiers
 `gh variable set` writes them directly from the values captured in earlier steps.
 
 ```powershell
-gh variable set AZURE_CLIENT_ID --body $AppId --repo glitchwerks/mom-bot
-gh variable set AZURE_TENANT_ID --body 48bca6c3-6d4f-4884-bc1a-648ae2362a32 --repo glitchwerks/mom-bot
-gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 --repo glitchwerks/mom-bot
+gh variable set AZURE_CLIENT_ID --body $AppId --repo glitchwerks/rsl-mom-bot
+gh variable set AZURE_TENANT_ID --body 48bca6c3-6d4f-4884-bc1a-648ae2362a32 --repo glitchwerks/rsl-mom-bot
+gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 --repo glitchwerks/rsl-mom-bot
 ```
 
 ---
