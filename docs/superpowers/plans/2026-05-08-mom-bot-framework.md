@@ -205,7 +205,7 @@ Document findings in `pre-epic-0-checklist.md` (or as a tracked GitHub issue).
 
 Siege-web bot env default domain: `salmondesert-a9a40ca1.westus.azurecontainerapps.io`.
 
-The topology is cross-region, not colocated. The ~50–70ms cross-region RTT became a documented design input for Epic #128. The transport choice (D-2) and ingress allowlist (B-8) in the Phase 1 scoping plan flow from this finding. See the Epic #128 verification comment at https://github.com/glitchwerks/mom-bot/issues/128#issuecomment-4509085682 and `docs/superpowers/plans/2026-05-20-mom-bot-epic-128-phase-1-scoping.md` §2 and §8 for the authoritative source.
+The topology is cross-region, not colocated. The ~50–70ms cross-region RTT became a documented design input for Epic #128. The transport choice (D-2) and ingress allowlist (B-8) in the Phase 1 scoping plan flow from this finding. See the Epic #128 verification comment at https://github.com/glitchwerks/mom-bot/issues/128#issuecomment-4509085682 and the decision-log extraction on issue #128 ([comment](https://github.com/glitchwerks/mom-bot/issues/128#issuecomment-4569698079)) for the cross-region topology context. Full Phase 1 scoping plan content recoverable from git history (deleted in PR #247).
 
 ### Epic 0 — Skeleton (mom_bot side only) + CI/CD baseline
 

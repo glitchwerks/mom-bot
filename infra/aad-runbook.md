@@ -210,7 +210,7 @@ After Phase 0.5 lands, `az role assignment list` should show these three assignm
 
 If `az role definition create` fails for tenant-policy or naming-collision reasons, grant built-in `Contributor` at sub scope as an expedient — but file a follow-up issue immediately to swap it for the custom role. Don't leave Contributor silently in place.
 
-See plan `docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md` § Phase 0.5 for design rationale.
+See the decision-log extraction on issue #96 ([comment](https://github.com/glitchwerks/mom-bot/issues/96#issuecomment-4569696448)) for design rationale. Full plan content recoverable from git history (deleted in PR #247).
 
 ---
 

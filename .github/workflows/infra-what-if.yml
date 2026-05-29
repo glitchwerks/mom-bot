@@ -9,8 +9,8 @@ name: Bicep what-if (PR preview)
 # (forks can't get an OIDC token) is irrelevant here because mom-bot has no
 # fork contributors.
 #
-# Informational only — what-if output is NOT a merge gate (Phase 1 per plan
-# docs/superpowers/plans/2026-05-17-bicep-deploy-and-revision-cleanup.md).
+# Informational only — what-if output is NOT a merge gate (Phase 1 per plan;
+# see issue #96 / git history; plan deleted in PR #247).
 # Write-permission verification belongs to Phase 2.
 #
 # Repo variables required (same as deploy.yml):
