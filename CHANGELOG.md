@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+### Changed
+
+- README: audit for staleness — Status, Roadmap, Database/Migrations, Project Structure, References sections refreshed to reflect v1.0 ship + v1.1 in progress (closes part of #249).
+
 ### Fixed
 
 - **OIDC federated credentials** updated to repo's canonical name `rsl-mom-bot` (was `mom-bot` pre-rename). Both `mom-bot-pr` and `mom-bot-main-push` FICs now match GitHub's current OIDC subject claim; unblocks the `Bicep what-if preview` workflow on PR-triggered runs and the next `workflow_dispatch` of `deploy.yml` (#248).
