@@ -92,6 +92,10 @@ jobs:
         # so migrations always run against the schema expected by the new code.
         # This mirrors the az containerapp update call below but targets the job.
         run: |
+          if ! az containerapp job show --name job-mom-bot-migrate --resource-group mom-bot &>/dev/null; then
+            echo "::error::Migration job 'job-mom-bot-migrate' does not exist. Run infra-deploy.yml first to create infrastructure."
+            exit 1
+          fi
           az containerapp job update \
             --name job-mom-bot-migrate \
             --resource-group mom-bot \
@@ -108,7 +112,7 @@ jobs:
             --resource-group mom-bot
 
       - name: Fetch migration logs from Log Analytics (OQ-3 poll-with-retry)
-        if: always() && steps.migrate_job.conclusion != 'skipped'
+        if: always() && steps.migrate_job.outcome != 'skipped'
         # OQ-3 binding decision: poll with retry — a single KQL fetch is
         # rejected because ContainerAppConsoleLogs_CL has a documented
         # multi-minute ingestion lag (spec §3 Q6).
@@ -128,6 +132,15 @@ jobs:
             --name "$JOB" --resource-group "$RG" \
             --query 'sort_by(@, &properties.startTime)[-1].name' -o tsv)
           echo "Execution name: $EXEC_NAME"
+
+          if [ -z "$EXEC_NAME" ]; then
+            echo "::warning::Could not retrieve execution name — skipping log fetch."
+            if [ "${{ steps.migrate_job.outcome }}" = "failure" ]; then
+              echo "::error::Migration job FAILED and execution name is unavailable. Check Azure portal for job execution details."
+              exit 1
+            fi
+            exit 0
+          fi
 
           # Resolve Log Analytics workspace customer ID.
           WORKSPACE_ID=$(az monitor log-analytics workspace list \
@@ -185,14 +198,16 @@ jobs:
             break
           done
 
-          if [ $ELAPSED -ge $TIMEOUT ] && [ -z "$LOGS" ]; then
-            echo "::warning::Log fetch timed out after ${TIMEOUT}s — no migration output available. Check Log Analytics manually."
+          # Propagate migration job failure as the PRIMARY signal.
+          # The log-timeout warning is secondary — a real failure should not be
+          # misread as "just a log ingestion issue".
+          if [ "${{ steps.migrate_job.outcome }}" = "failure" ]; then
+            echo "::error::Migration job FAILED — see above log output and job execution details in the Azure portal."
+            exit 1
           fi
 
-          # Propagate migration job failure to this step.
-          if [ "${{ steps.migrate_job.outcome }}" = "failure" ]; then
-            echo "::error::Migration job failed — see above log output and job execution details."
-            exit 1
+          if [ $ELAPSED -ge $TIMEOUT ] && [ -z "$LOGS" ]; then
+            echo "::warning::Log fetch timed out after ${TIMEOUT}s — no migration output available. Check Log Analytics manually."
           fi
 
       - name: Deploy container image to prod

@@ -26,7 +26,7 @@ echo "[migrate] acquiring Entra access token for Postgres..."
 # Acquire a token via IMDS.  Retry up to 5 times with exponential back-off
 # to handle cold-start IMDS latency.
 attempt=0
-while [ $attempt -lt 5 ]; do
+while [ "$attempt" -lt 5 ]; do
     TOKEN=$(curl -sf \
         -H "Metadata: true" \
         "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fossrdbms-aad.database.windows.net&client_id=${AZURE_CLIENT_ID}" \

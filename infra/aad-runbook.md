@@ -395,6 +395,36 @@ bash infra/scripts/create-entra-admins.sh
 
 The script is idempotent — safe to re-run.
 
+### Troubleshooting: First-run Entra admin propagation delay
+
+**Symptom:** The first `az containerapp job start` (or manual run of the
+migration job) fails with an authentication error from Postgres — typically
+`password authentication failed for user "mi-mom-bot"` or a similar Entra
+token rejection. The infra is otherwise healthy.
+
+**Cause:** After `create-entra-admins.sh` completes, the Postgres Flexible
+Server takes approximately 60–90 seconds to propagate the new Entra admin
+grant internally. A job triggered immediately after the script will hit the
+server before propagation is complete and receive an auth failure. This is
+a one-time cost per spec §3 Q4 — it does not recur on subsequent runs.
+
+**How to distinguish from a real config problem:**
+- If `UAMI_OBJECT_ID` in the script output matches `mi-mom-bot`'s principal ID
+  (verifiable with `az identity show -g mom-bot -n mi-mom-bot --query principalId -o tsv`),
+  and the error appears within 2 minutes of running the script, it is almost
+  certainly a propagation delay.
+- If the error persists beyond 3 minutes, or `UAMI_OBJECT_ID` was wrong,
+  re-run the script to confirm idempotency and check the Postgres admin list:
+  `az postgres flexible-server microsoft-entra-admin list -g mom-bot --server-name <PG_SERVER> -o table`.
+
+**Recovery:** Wait 60–90 seconds and re-trigger the job:
+
+```bash
+az containerapp job start \
+  --name job-mom-bot-migrate \
+  --resource-group mom-bot
+```
+
 **If `mom-bot-gha` was previously registered as Entra admin** and you want to revoke
 that grant (optional cleanup), run:
 
