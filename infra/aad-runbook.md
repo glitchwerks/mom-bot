@@ -64,6 +64,15 @@ The JSON body is written to a temp file to avoid PowerShell interpolating
 dollar-signs inside the JSON. The closing `'@` must be at column 0 — no
 leading whitespace.
 
+> **Repo-name discipline (#248):** the federated credential `subject` claim
+> uses the repo's **canonical name on GitHub**. The repo was renamed from
+> `mom-bot` → `rsl-mom-bot` on 2026-05-29; existing FICs were updated in
+> place via `az ad app federated-credential update`. If the repo is renamed
+> again, every FIC needs its `subject` updated — GitHub's OIDC token always
+> carries the current canonical name, so a stale FIC silently fails with
+> `AADSTS700213` on first use after the rename (observed on PR #247 →
+> tracked under #248).
+
 ### 3a — Trust pushes to `main`
 
 ```powershell
@@ -71,7 +80,7 @@ $FedCredMain = @'
 {
   "name": "mom-bot-main-push",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:glitchwerks/mom-bot:ref:refs/heads/main",
+  "subject": "repo:glitchwerks/rsl-mom-bot:ref:refs/heads/main",
   "description": "GHA OIDC trust for pushes to main branch",
   "audiences": ["api://AzureADTokenExchange"]
 }
@@ -89,7 +98,7 @@ $FedCredPr = @'
 {
   "name": "mom-bot-pr",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:glitchwerks/mom-bot:pull_request",
+  "subject": "repo:glitchwerks/rsl-mom-bot:pull_request",
   "description": "GHA OIDC trust for pull request workflows",
   "audiences": ["api://AzureADTokenExchange"]
 }
