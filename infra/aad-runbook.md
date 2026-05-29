@@ -64,6 +64,15 @@ The JSON body is written to a temp file to avoid PowerShell interpolating
 dollar-signs inside the JSON. The closing `'@` must be at column 0 — no
 leading whitespace.
 
+> **Repo-name discipline (#248):** the federated credential `subject` claim
+> uses the repo's **canonical name on GitHub**. The repo was renamed from
+> `mom-bot` → `rsl-mom-bot` on 2026-05-29; existing FICs were updated in
+> place via `az ad app federated-credential update`. If the repo is renamed
+> again, every FIC needs its `subject` updated — GitHub's OIDC token always
+> carries the current canonical name, so a stale FIC silently fails with
+> `AADSTS700213` on first use after the rename (observed on PR #247 →
+> tracked under #248).
+
 ### 3a — Trust pushes to `main`
 
 ```powershell
@@ -71,7 +80,7 @@ $FedCredMain = @'
 {
   "name": "mom-bot-main-push",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:glitchwerks/mom-bot:ref:refs/heads/main",
+  "subject": "repo:glitchwerks/rsl-mom-bot:ref:refs/heads/main",
   "description": "GHA OIDC trust for pushes to main branch",
   "audiences": ["api://AzureADTokenExchange"]
 }
@@ -89,7 +98,7 @@ $FedCredPr = @'
 {
   "name": "mom-bot-pr",
   "issuer": "https://token.actions.githubusercontent.com",
-  "subject": "repo:glitchwerks/mom-bot:pull_request",
+  "subject": "repo:glitchwerks/rsl-mom-bot:pull_request",
   "description": "GHA OIDC trust for pull request workflows",
   "audiences": ["api://AzureADTokenExchange"]
 }
@@ -390,9 +399,9 @@ These are **Variables** (not Secrets — they are non-sensitive OIDC identifiers
 `gh variable set` writes them directly from the values captured in earlier steps.
 
 ```powershell
-gh variable set AZURE_CLIENT_ID --body $AppId --repo glitchwerks/mom-bot
-gh variable set AZURE_TENANT_ID --body 48bca6c3-6d4f-4884-bc1a-648ae2362a32 --repo glitchwerks/mom-bot
-gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 --repo glitchwerks/mom-bot
+gh variable set AZURE_CLIENT_ID --body $AppId --repo glitchwerks/rsl-mom-bot
+gh variable set AZURE_TENANT_ID --body 48bca6c3-6d4f-4884-bc1a-648ae2362a32 --repo glitchwerks/rsl-mom-bot
+gh variable set AZURE_SUBSCRIPTION_ID --body 213aa1f8-32d1-4ffe-8f4d-6e60f1cd9dc0 --repo glitchwerks/rsl-mom-bot
 ```
 
 ---

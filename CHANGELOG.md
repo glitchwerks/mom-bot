@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- Add a "### 📣 Highlights" sub-section here before cutting the next release.
      See RELEASING.md § "Discord Highlights convention" for what to write there. -->
 
+### Fixed
+
+- **OIDC federated credentials** updated to repo's canonical name `rsl-mom-bot` (was `mom-bot` pre-rename). Both `mom-bot-pr` and `mom-bot-main-push` FICs now match GitHub's current OIDC subject claim; unblocks the `Bicep what-if preview` workflow on PR-triggered runs and the next `workflow_dispatch` of `deploy.yml` (#248).
+
 ### Removed
 
 - Removed five completed plan files per lifecycle policy (#246).
@@ -57,5 +61,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Pre-1.0 history**: Initial pre-1.0 development — see `git log` and the merged PR history for full provenance.
 
-[Unreleased]: https://github.com/glitchwerks/mom-bot/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/glitchwerks/mom-bot/releases/tag/v1.0.0
+[Unreleased]: https://github.com/glitchwerks/rsl-mom-bot/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/glitchwerks/rsl-mom-bot/releases/tag/v1.0.0
