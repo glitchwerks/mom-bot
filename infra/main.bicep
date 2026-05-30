@@ -119,21 +119,6 @@ module postgres 'modules/postgres.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Storage (AzureFile backing for SQLite — stopgap, issue #87)
-// Deploys before containerApp so its storageAccountName output is available
-// when containerapp.bicep creates the CAE storage binding. No dependsOn
-// needed — the output reference creates the ordering implicitly.
-// ---------------------------------------------------------------------------
-
-module storage 'modules/storage.bicep' = {
-  name: 'deploy-storage'
-  scope: rg
-  params: {
-    location: location
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Observability (Log Analytics Workspace + Application Insights)
 // Must be declared before containerApp so Bicep resolves the symbol
 // references in the containerApp params block below.
@@ -149,7 +134,7 @@ module observability 'modules/observability.bicep' = {
 }
 
 // ---------------------------------------------------------------------------
-// Container Apps (environment + app + CAE storage binding)
+// Container Apps (environment + app)
 // ---------------------------------------------------------------------------
 
 module containerApp 'modules/containerapp.bicep' = {
@@ -164,7 +149,6 @@ module containerApp 'modules/containerapp.bicep' = {
     containerImage: containerImage
     keyVaultName: keyVaultName
     keyVaultUri: kv.outputs.uri
-    storageAccountName: storage.outputs.storageAccountName
     maxReplicas: 1
     momBotEnv: momBotEnv
     logAnalyticsCustomerId: observability.outputs.logAnalyticsCustomerId

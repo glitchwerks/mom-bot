@@ -1,18 +1,3 @@
-// -----------------------------------------------------------------------------
-// SQLite-on-SMB risk acknowledgement (Policy 3, issue #87)
-// -----------------------------------------------------------------------------
-// This Container App runs SQLite over an AzureFile (SMB) volume mount.
-// SQLite + SMB is NOT a supported production database topology — SMB does not
-// honour the fsync/lock semantics SQLite assumes. Specific risks:
-//   - Corruption window if the SMB connection drops mid-write.
-//   - Locking is advisory only; concurrent writers will corrupt the file.
-//     Mitigated by Policy 1 (@allowed([1]) maxReplicas — single writer).
-//   - No point-in-time recovery; daily share snapshots (Policy 2) are the
-//     recovery SLA (7-day retention; granularity = 1 day).
-// This is a STOPGAP until PostgreSQL migration (Epic 1+). Do not extend the
-// SQLite-on-SMB pattern to additional services.
-// -----------------------------------------------------------------------------
-
 // containerapp.bicep — Container Apps Environment + Container App ca-mom-bot.
 //
 // Design choices:
@@ -32,17 +17,15 @@
 //   ACA IMDS endpoint does not auto-select the sole UserAssigned identity.
 // - Always-on single replica (minReplicas: 1, maxReplicas: 1). The two bounds
 //   solve different problems and must not be conflated:
-//   - maxReplicas: 1 enforces single-writer for SQLite + WAL (Policy 1, issue #87).
+//   - maxReplicas: 1 keeps replica count bounded (retained from Policy 1, issue #87).
 //     @allowed([1]) on maxReplicas makes this constraint load-bearing at Bicep build time.
 //   - minReplicas: 1 keeps the Discord gateway WebSocket alive and the reminder
 //     scheduler ticking — a Discord bot can't scale to zero. Without this, a new
 //     revision provisions Healthy but never starts a replica, and the bot silently
 //     goes offline (see issue #181).
 //   Do not lower minReplicas to 0 to "save cost"; the bot stops working.
-// - CAE storage binding lives here (not in storage.bicep) because the binding
-//   is a child of the CAE. Co-locating them gives Bicep a symbol reference
-//   (storageBinding.name) so the container app's volumes[] depends on the
-//   binding automatically — no dependsOn needed, no ARM validation race.
+// - Postgres-backed (no AzureFile volume). The SQLite-on-AzureFile stopgap
+//   (issue #87) was removed in #240 after the Postgres migration landed (#92).
 //
 // Role assignments:
 // - (none managed by this module — GHA SP bootstrap roles are granted out-of-band
@@ -72,16 +55,7 @@ param keyVaultName string
 @description('URI of the Key Vault (e.g. https://kv-mombot-eastus2.vault.azure.net/). Used for KV-backed secret references.')
 param keyVaultUri string
 
-@description('Name of the Storage Account backing the AzureFile volume (from storage.bicep output storageAccountName).')
-param storageAccountName string
-
-@description('Name of the Container Apps managed-environment storage binding to create on the CAE.')
-param storageBindingName string = 'mom-bot-data-binding'
-
-@description('Name of the Azure File Share to bind (must match the share created in storage.bicep).')
-param fileShareName string = 'mom-bot-data'
-
-@description('Policy 1 (issue #87): single-writer enforcement. @allowed([1]) makes maxReplicas > 1 a hard Bicep build error, preventing accidental multi-replica deployments that would corrupt the SQLite DB.')
+@description('Maximum replica count. Cap retained from the pre-Postgres era (Policy 1, issue #87); @allowed([1]) makes maxReplicas > 1 a hard Bicep build error at compile time.')
 @allowed([1])
 param maxReplicas int = 1
 
@@ -121,34 +95,6 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
 }
 
 // ---------------------------------------------------------------------------
-// Storage Account reference (existing — created by storage.bicep)
-// ---------------------------------------------------------------------------
-
-resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
-  name: storageAccountName
-  scope: resourceGroup()
-}
-
-// ---------------------------------------------------------------------------
-// CAE storage binding — child of the CAE, must exist before the Container App
-// references it in volumes[].storageName. Bicep derives the ordering
-// automatically via the storageBinding.name symbol reference below.
-// ---------------------------------------------------------------------------
-
-resource storageBinding 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
-  parent: cae
-  name: storageBindingName
-  properties: {
-    azureFile: {
-      accountName: storageAccount.name
-      accountKey: storageAccount.listKeys().keys[0].value
-      shareName: fileShareName
-      accessMode: 'ReadWrite'
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Container App
 // ---------------------------------------------------------------------------
 
@@ -168,7 +114,7 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
       // Container Apps auto-provisions TLS when external=true; transport: 'http' is correct here
       // (the platform does TLS termination at the edge — specifying 'https' is wrong for this field).
       // IP allowlist restricts inbound to siege-web prod + dev CAE static egress IPs (D-2; mom-bot#76).
-      // Policy 1 reinforcement (issue #87): no rolling overlap — old replica drains before new one starts.
+      // Single active revision: old replica drains before the new one starts, avoiding rolling overlap during deploys.
       ingress: {
         external: true
         targetPort: 8001
@@ -216,15 +162,6 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
         minReplicas: 1
         maxReplicas: maxReplicas
       }
-      volumes: [
-        {
-          name: 'data'
-          storageType: 'AzureFile'
-          // Symbol reference — Bicep sees the dependency on storageBinding and
-          // ensures the binding is created before the container app is applied.
-          storageName: storageBinding.name
-        }
-      ]
       containers: [
         {
           name: 'mom-bot'
@@ -253,12 +190,6 @@ resource ca 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               secretRef: 'app-insights-connection-string'
-            }
-          ]
-          volumeMounts: [
-            {
-              volumeName: 'data'
-              mountPath: '/data'
             }
           ]
           // httpGet liveness probe — calls GET /healthz on port 8080.

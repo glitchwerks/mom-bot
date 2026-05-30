@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Removed five completed plan files per lifecycle policy (#246).
+- **Dead AzureFile plumbing removed** — `storage.bicep` (storage account + file share), the CAE `storageBinding` resource, and the `/data` volume mount deleted from Bicep. The SQLite-on-AzureFile stopgap (#92) has been superseded by Postgres since v1.0; post-deploy operator step required to confirm share removal (see #240). (#240)
 
 ## [1.0.0] - 2026-05-26
 

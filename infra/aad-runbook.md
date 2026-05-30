@@ -990,7 +990,14 @@ az deployment sub create `
 
 ---
 
-## AzureFile-backed SQLite (Policy decisions from #87)
+## AzureFile-backed SQLite (Policy decisions from #87) — DEPRECATED
+
+> **⚠️ DEPRECATED — removed in #240.** This section documents the
+> SQLite-on-AzureFile stopgap that ran in production from Epic 0 until the
+> Postgres migration (#92) superseded it. The storage account, file share,
+> volume mount, and all associated policies below were removed from
+> infrastructure in #240. **Do not follow these procedures** — they operate on
+> resources that no longer exist. Retained as historical record only.
 
 This section documents the operator policies that govern the SQLite-on-AzureFile
 stopgap introduced in PR #87. These policies are load-bearing — violating them
