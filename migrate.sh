@@ -18,6 +18,11 @@
 
 set -eu
 
+# Interpreter paths default to the container image locations but can be
+# overridden for off-container testing (e.g. pytest subprocess tests).
+: "${PYTHON_BIN:=/app/.venv/bin/python}"
+: "${ALEMBIC_BIN:=/app/.venv/bin/alembic}"
+
 : "${AZURE_CLIENT_ID:?AZURE_CLIENT_ID must be set}"
 : "${PGHOST:?PGHOST must be set}"
 : "${PGDATABASE:=mom_bot}"
@@ -26,7 +31,7 @@ echo "[migrate] acquiring Entra access token for Postgres..."
 
 # Acquire a token via azure-identity ManagedIdentityCredential.
 # azure-identity handles IMDS retries and exponential back-off internally.
-TOKEN=$(/app/.venv/bin/python -m mom_bot.migrations.acquire_token)
+TOKEN=$("$PYTHON_BIN" -m mom_bot.migrations.acquire_token)
 
 if [ -z "$TOKEN" ]; then
     echo "[migrate] ERROR: failed to acquire Entra token"
@@ -41,4 +46,4 @@ export MOM_BOT_DATABASE_URL="postgresql+psycopg://mi-mom-bot@${PGHOST}:5432/${PG
 export PGPASSWORD="$TOKEN"
 
 echo "[migrate] running alembic upgrade head against ${PGHOST}/${PGDATABASE}"
-exec /app/.venv/bin/alembic upgrade head
+exec "$ALEMBIC_BIN" upgrade head

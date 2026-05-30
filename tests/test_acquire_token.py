@@ -4,6 +4,9 @@ These tests exercise the token-acquisition helper using mocked credentials
 so that no real IMDS / Azure network call is made.  The real IMDS endpoint
 is only reachable inside an Azure Container Apps environment; running the
 helper with a real managed identity locally is intentionally out of scope.
+
+The ``TestMain`` class covers the ``main()`` function (the ``__main__``
+entrypoint) using monkeypatching so no subprocess is spawned.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest  # noqa: F401 (used in pytest.raises)
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,3 +122,116 @@ class TestGetPostgresAccessToken:
         ):
             with pytest.raises(Exception, match="IMDS not reachable"):
                 get_postgres_access_token(_CLIENT_ID)
+
+
+# ---------------------------------------------------------------------------
+# Tests for main() — the __main__ entrypoint
+# ---------------------------------------------------------------------------
+
+
+class TestMain:
+    """Tests for ``main()`` (the ``python -m mom_bot.migrations.acquire_token``
+    entrypoint).
+
+    All tests call ``main()`` directly rather than launching a subprocess,
+    so they are fast and do not require the module to be importable as
+    ``__main__``.  Environment manipulation uses ``monkeypatch`` to avoid
+    polluting the real process environment.
+    """
+
+    def test_missing_client_id_exits_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Exits with status 1 when AZURE_CLIENT_ID is absent.
+
+        Verifies that ``main()`` calls ``sys.exit(1)`` and does not attempt
+        token acquisition when the variable is not set at all.
+        """
+        from mom_bot.migrations.acquire_token import main
+
+        monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
+
+    def test_empty_client_id_exits_1(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Exits with status 1 when AZURE_CLIENT_ID is present but empty.
+
+        A whitespace-only value must also be treated as missing because
+        ``strip()`` is applied before the emptiness check.
+        """
+        from mom_bot.migrations.acquire_token import main
+
+        monkeypatch.setenv("AZURE_CLIENT_ID", "   ")
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
+
+    def test_missing_client_id_writes_to_stderr(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Writes an error message to stderr when AZURE_CLIENT_ID is absent.
+
+        The message must mention ``AZURE_CLIENT_ID`` so operators know which
+        variable to fix when reviewing job logs.
+        """
+        from mom_bot.migrations.acquire_token import main
+
+        monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        captured = capsys.readouterr()
+        assert "AZURE_CLIENT_ID" in captured.err
+        assert captured.out == ""
+
+    def test_happy_path_prints_token_no_newline(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Prints the raw token to stdout with no trailing newline.
+
+        Shell callers capture the output with ``TOKEN=$(...)``.  A trailing
+        newline would be stripped by the shell automatically, but the contract
+        is ``print(_token, end="")`` — no newline at all — so we assert the
+        exact bytes here.
+        """
+        from mom_bot.migrations.acquire_token import main
+
+        monkeypatch.setenv("AZURE_CLIENT_ID", _CLIENT_ID)
+
+        mock_cred = MagicMock()
+        mock_cred.get_token.return_value = _make_token_response(_FAKE_TOKEN)
+
+        with patch(
+            "mom_bot.migrations.acquire_token.get_postgres_access_token",
+            return_value=_FAKE_TOKEN,
+        ):
+            main()
+
+        captured = capsys.readouterr()
+        assert captured.out == _FAKE_TOKEN
+        assert not captured.out.endswith("\n")
+
+    def test_happy_path_no_stderr_output(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Writes nothing to stderr on the happy path.
+
+        Diagnostic output on stderr would pollute CI logs unnecessarily when
+        the migration runs successfully.
+        """
+        from mom_bot.migrations.acquire_token import main
+
+        monkeypatch.setenv("AZURE_CLIENT_ID", _CLIENT_ID)
+
+        with patch(
+            "mom_bot.migrations.acquire_token.get_postgres_access_token",
+            return_value=_FAKE_TOKEN,
+        ):
+            main()
+
+        captured = capsys.readouterr()
+        assert captured.err == ""

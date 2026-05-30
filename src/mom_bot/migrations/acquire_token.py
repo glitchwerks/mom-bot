@@ -24,7 +24,7 @@ import sys
 
 from azure.identity import ManagedIdentityCredential
 
-__all__ = ["get_postgres_access_token"]
+__all__ = ["get_postgres_access_token", "main"]
 
 # AAD scope for Azure Database for PostgreSQL Flexible Server.
 _POSTGRES_AAD_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
@@ -61,7 +61,17 @@ def get_postgres_access_token(client_id: str) -> str:
     return str(token.token)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entrypoint for ``python -m mom_bot.migrations.acquire_token``.
+
+    Reads ``AZURE_CLIENT_ID`` from the environment, acquires a Postgres
+    Entra access token, and writes the raw token to stdout with no
+    trailing newline so that shell callers can capture it with
+    ``TOKEN=$(...)``.
+
+    Exits with status 1 and writes a human-readable message to stderr
+    when ``AZURE_CLIENT_ID`` is absent or empty.
+    """
     _client_id = os.environ.get("AZURE_CLIENT_ID", "").strip()
     if not _client_id:
         print(
@@ -72,3 +82,7 @@ if __name__ == "__main__":
 
     _token = get_postgres_access_token(_client_id)
     print(_token, end="")
+
+
+if __name__ == "__main__":
+    main()
