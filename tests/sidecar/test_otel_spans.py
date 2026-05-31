@@ -12,6 +12,7 @@ provider so the installed tracer does not leak between tests.
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -117,6 +118,11 @@ def span_exporter() -> InMemorySpanExporter:
     around each test, otherwise the provider set by the first test (or
     by module import side effects) wins for the entire pytest session.
 
+    Teardown calls ``provider.shutdown()`` before restoring state so
+    all span processors and exporters are cleanly finalised.  This
+    prevents residual processor activity (callbacks, locks) from
+    leaking into subsequent tests that do not use OTel.
+
     Yields:
         The ``InMemorySpanExporter`` that will capture spans during the
         test.
@@ -144,6 +150,11 @@ def span_exporter() -> InMemorySpanExporter:
     try:
         yield exporter
     finally:
+        # Shut down the provider so all span processors flush and
+        # release any locks or callbacks before we restore global state.
+        # This prevents residual processor activity from leaking into
+        # tests that run after this fixture tears down.
+        provider.shutdown()
         # Restore the previous provider by direct pointer assignment so we
         # never pass the proxy back into set_tracer_provider (see comment
         # above for why that causes infinite recursion).
@@ -156,12 +167,19 @@ def instrumented_client(
     session_factory: sessionmaker[Session],
     mock_guild: MagicMock,
     span_exporter: InMemorySpanExporter,
-) -> TestClient:
+) -> Generator[TestClient, None, None]:
     """FastAPI TestClient with InMemorySpanExporter installed globally.
 
     Patches ``apply_day_role`` to return an 'applied' result so the
     handler reaches its successful completion path (where the span is
     emitted with the ``correlation_id`` attribute).
+
+    The ``TestClient`` is entered as a context manager so Starlette
+    starts the ASGI lifespan and keeps a single ``BlockingPortal``
+    alive for the duration of the test.  Without entering the context
+    manager each HTTP request creates and destroys its own event loop
+    in a worker thread, leaving background thread activity that can
+    interfere with subsequent async tests.
 
     Args:
         session_factory: In-memory session factory.
@@ -169,8 +187,8 @@ def instrumented_client(
         span_exporter: The in-memory exporter fixture (ensures the
             provider is installed before the app is built).
 
-    Returns:
-        A configured FastAPI TestClient.
+    Yields:
+        A configured FastAPI TestClient with its ASGI lifespan active.
     """
     applied = RoleSyncResult(
         status="applied",
@@ -189,7 +207,8 @@ def instrumented_client(
         new_callable=AsyncMock,
         return_value=applied,
     ):
-        yield TestClient(app)
+        with TestClient(app) as client:
+            yield client
 
 
 # ---------------------------------------------------------------------------
