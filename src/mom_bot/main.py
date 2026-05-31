@@ -52,6 +52,7 @@ from mom_bot.reminders.scheduler import ReminderScheduler
 from mom_bot.reminders.seed import _maybe_seed_reminders
 from mom_bot.roles.seed import seed_day_role_map
 from mom_bot.sidecar import build_app
+from mom_bot.telemetry import configure_azure_monitor
 
 _logger = logging.getLogger(__name__)
 
@@ -506,6 +507,9 @@ def main() -> None:
     :func:`make_client`, and blocks until the gateway connection closes.
     """
     configure_logging()
+    # Configure Azure Monitor telemetry early (before any request handling).
+    # If APPLICATIONINSIGHTS_CONNECTION_STRING is absent the call is a no-op.
+    configure_azure_monitor()
     token = load_secret("discord-token")
     client = make_client()
     client.run(token)
