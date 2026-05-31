@@ -136,6 +136,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi import Path as FastAPIPath
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from opentelemetry import trace as _otel_trace
 from pydantic import BaseModel, model_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -1122,71 +1123,129 @@ def build_app(
         """
         discord_id_str = body.discord_id
 
-        async with _get_lock(discord_id_str):
-            with session_factory() as session:
-                stored = session.get(MemberRoleSyncState, discord_id_str)
+        # Emit an OTel span covering this request so the correlation_id
+        # is visible in App Insights trace view (issue #199).
+        # The tracer is obtained at call time from the global provider so
+        # it always resolves to whichever TracerProvider is installed at
+        # the moment the request is handled (Azure Monitor in production,
+        # InMemorySpanExporter in tests).  A module-level cached tracer
+        # would resolve once against the first provider it encounters and
+        # silently stay pinned to it, breaking provider-swapping in tests.
+        with _otel_trace.get_tracer(__name__).start_as_current_span("role_sync") as _role_sync_span:
+            _role_sync_span.set_attribute("correlation_id", body.correlation_id)
+            _role_sync_span.set_attribute("discord_id", discord_id_str)
+            _role_sync_span.set_attribute("action", body.action)
 
-                # ----------------------------------------------------------
-                # Step 1: Exact replay check
-                # ----------------------------------------------------------
-                if stored is not None:
-                    key_matches = (
-                        stored.last_assigned_at == body.assigned_at
-                        and stored.last_action == body.action
-                        and stored.last_day_number == body.day_number
-                    )
-                    if key_matches:
-                        # Attempt to decode stored JSON; treat corruption as
-                        # a cache miss and fall through to the fresh-write path.
-                        try:
-                            stored_added = json.loads(stored.last_response_added)
-                            stored_removed = json.loads(stored.last_response_removed)
-                        except json.JSONDecodeError:
-                            _logger.error(
-                                "role_sync_json_corrupt correlation_id=%s "
-                                "discord_id=%s added_raw=%.120r "
-                                "removed_raw=%.120r — treating as cache miss",
-                                body.correlation_id,
-                                discord_id_str,
-                                stored.last_response_added,
-                                stored.last_response_removed,
-                            )
-                            # Fall through to fresh-write below.
-                        else:
-                            # Exact replay — return stored response; no
-                            # service call.
+            async with _get_lock(discord_id_str):
+                with session_factory() as session:
+                    stored = session.get(MemberRoleSyncState, discord_id_str)
+
+                    # ----------------------------------------------------------
+                    # Step 1: Exact replay check
+                    # ----------------------------------------------------------
+                    if stored is not None:
+                        key_matches = (
+                            stored.last_assigned_at == body.assigned_at
+                            and stored.last_action == body.action
+                            and stored.last_day_number == body.day_number
+                        )
+                        if key_matches:
+                            # Attempt to decode stored JSON; treat corruption as
+                            # a cache miss and fall through to the fresh-write path.
+                            try:
+                                stored_added = json.loads(stored.last_response_added)
+                                stored_removed = json.loads(stored.last_response_removed)
+                            except json.JSONDecodeError:
+                                _logger.error(
+                                    "role_sync_json_corrupt correlation_id=%s "
+                                    "discord_id=%s added_raw=%.120r "
+                                    "removed_raw=%.120r — treating as cache miss",
+                                    body.correlation_id,
+                                    discord_id_str,
+                                    stored.last_response_added,
+                                    stored.last_response_removed,
+                                )
+                                # Fall through to fresh-write below.
+                            else:
+                                # Exact replay — return stored response; no
+                                # service call.
+                                _logger.info(
+                                    "role_sync_idempotent_replay "
+                                    "correlation_id=%s discord_id=%s "
+                                    "siege_id=%s day_number=%s action=%s "
+                                    "assigned_at=%s status=%s added=%s "
+                                    "removed=%s attempt=2",
+                                    body.correlation_id,
+                                    body.discord_id,
+                                    body.siege_id,
+                                    body.day_number,
+                                    body.action,
+                                    body.assigned_at,
+                                    stored.last_response_status,
+                                    stored_added,
+                                    stored_removed,
+                                )
+                                return RoleSyncResponse(
+                                    status=stored.last_response_status,  # type: ignore[arg-type]
+                                    added=stored_added,
+                                    removed=stored_removed,
+                                    reason=stored.last_response_reason,
+                                )
+
+                        # ----------------------------------------------------------
+                        # Step 2: Stale-write check
+                        # ----------------------------------------------------------
+                        if body.assigned_at < stored.last_assigned_at:
                             _logger.info(
-                                "role_sync_idempotent_replay "
-                                "correlation_id=%s discord_id=%s "
+                                "role_sync correlation_id=%s discord_id=%s "
                                 "siege_id=%s day_number=%s action=%s "
-                                "assigned_at=%s status=%s added=%s "
-                                "removed=%s attempt=2",
+                                "assigned_at=%s status=skipped "
+                                "reason=stale_write added=[] removed=[] attempt=1",
                                 body.correlation_id,
                                 body.discord_id,
                                 body.siege_id,
                                 body.day_number,
                                 body.action,
                                 body.assigned_at,
-                                stored.last_response_status,
-                                stored_added,
-                                stored_removed,
                             )
                             return RoleSyncResponse(
-                                status=stored.last_response_status,  # type: ignore[arg-type]
-                                added=stored_added,
-                                removed=stored_removed,
-                                reason=stored.last_response_reason,
+                                status="skipped",
+                                added=[],
+                                removed=[],
+                                reason="stale_write",
+                                last_assigned_at=stored.last_assigned_at,
                             )
 
-                    # ----------------------------------------------------------
-                    # Step 2: Stale-write check
-                    # ----------------------------------------------------------
-                    if body.assigned_at < stored.last_assigned_at:
+                    # Extract the previously-recorded day_number while the
+                    # session is still open.  Required for the unassign path
+                    # below where body.day_number is intentionally None per
+                    # contract (§ 2).
+                    prior_day_number: int | None = (
+                        stored.last_day_number if stored is not None else None
+                    )
+
+                # ------------------------------------------------------------------
+                # Step 3: Fresh write — invoke role service
+                #
+                # For action="unassign" with day_number=None (the standard
+                # contract shape), the role to remove is determined by consulting
+                # the member's prior state rather than the inbound payload.
+                #
+                # - No prior state row (prior_day_number is None and stored is
+                #   None): member was never assigned a day role; return
+                #   skipped/already_lacks_role without calling the service.
+                # - Prior state row exists with last_day_number=N: resolve N as
+                #   the target day and pass it to apply_day_role so the service
+                #   can look up and remove the correct Discord role.
+                # ------------------------------------------------------------------
+                if body.action == "unassign" and body.day_number is None:
+                    if prior_day_number is None:
+                        # No prior assign state → member holds no day role.
                         _logger.info(
                             "role_sync correlation_id=%s discord_id=%s "
                             "siege_id=%s day_number=%s action=%s "
                             "assigned_at=%s status=skipped "
-                            "reason=stale_write added=[] removed=[] attempt=1",
+                            "reason=already_lacks_role added=[] removed=[] attempt=1",
                             body.correlation_id,
                             body.discord_id,
                             body.siege_id,
@@ -1198,104 +1257,60 @@ def build_app(
                             status="skipped",
                             added=[],
                             removed=[],
-                            reason="stale_write",
-                            last_assigned_at=stored.last_assigned_at,
+                            reason="already_lacks_role",
                         )
+                    # Resolve the day_number from prior state so the service
+                    # can look up and remove the correct Discord role.
+                    resolved_day_number: int | None = prior_day_number
+                else:
+                    resolved_day_number = body.day_number
 
-                # Extract the previously-recorded day_number while the session
-                # is still open.  Required for the unassign path below where
-                # body.day_number is intentionally None per contract (§ 2).
-                prior_day_number: int | None = (
-                    stored.last_day_number if stored is not None else None
+                result = await apply_day_role(
+                    guild=guild,
+                    discord_id=int(body.discord_id),
+                    action=body.action,
+                    day_number=resolved_day_number,
+                    correlation_id=body.correlation_id,
+                    session_factory=session_factory,
                 )
 
-            # ------------------------------------------------------------------
-            # Step 3: Fresh write — invoke role service
-            #
-            # For action="unassign" with day_number=None (the standard
-            # contract shape), the role to remove is determined by consulting
-            # the member's prior state rather than the inbound payload.
-            #
-            # - No prior state row (prior_day_number is None and stored is
-            #   None): member was never assigned a day role; return
-            #   skipped/already_lacks_role without calling the service.
-            # - Prior state row exists with last_day_number=N: resolve N as
-            #   the target day and pass it to apply_day_role so the service
-            #   can look up and remove the correct Discord role.
-            # ------------------------------------------------------------------
-            if body.action == "unassign" and body.day_number is None:
-                if prior_day_number is None:
-                    # No prior assign state → member holds no day role.
-                    _logger.info(
-                        "role_sync correlation_id=%s discord_id=%s "
-                        "siege_id=%s day_number=%s action=%s "
-                        "assigned_at=%s status=skipped "
-                        "reason=already_lacks_role added=[] removed=[] attempt=1",
-                        body.correlation_id,
-                        body.discord_id,
-                        body.siege_id,
-                        body.day_number,
-                        body.action,
-                        body.assigned_at,
-                    )
-                    return RoleSyncResponse(
-                        status="skipped",
-                        added=[],
-                        removed=[],
-                        reason="already_lacks_role",
-                    )
-                # Resolve the day_number from prior state so the service can
-                # look up and remove the correct Discord role.
-                resolved_day_number: int | None = prior_day_number
-            else:
-                resolved_day_number = body.day_number
+                # UPSERT the state row.
+                with session_factory() as session:
+                    row = session.get(MemberRoleSyncState, discord_id_str)
+                    if row is None:
+                        row = MemberRoleSyncState(discord_id=discord_id_str)
+                        session.add(row)
+                    row.last_assigned_at = body.assigned_at
+                    row.last_action = body.action
+                    row.last_day_number = body.day_number
+                    row.last_correlation_id = body.correlation_id
+                    row.last_response_status = result.status
+                    row.last_response_added = json.dumps(result.added)
+                    row.last_response_removed = json.dumps(result.removed)
+                    row.last_response_reason = result.reason
+                    session.commit()
 
-            result = await apply_day_role(
-                guild=guild,
-                discord_id=int(body.discord_id),
-                action=body.action,
-                day_number=resolved_day_number,
-                correlation_id=body.correlation_id,
-                session_factory=session_factory,
+            _logger.info(
+                "role_sync correlation_id=%s discord_id=%s siege_id=%s "
+                "day_number=%s action=%s assigned_at=%s status=%s "
+                "added=%s removed=%s attempt=1",
+                body.correlation_id,
+                body.discord_id,
+                body.siege_id,
+                body.day_number,
+                body.action,
+                body.assigned_at,
+                result.status,
+                result.added,
+                result.removed,
             )
 
-            # UPSERT the state row.
-            with session_factory() as session:
-                row = session.get(MemberRoleSyncState, discord_id_str)
-                if row is None:
-                    row = MemberRoleSyncState(discord_id=discord_id_str)
-                    session.add(row)
-                row.last_assigned_at = body.assigned_at
-                row.last_action = body.action
-                row.last_day_number = body.day_number
-                row.last_correlation_id = body.correlation_id
-                row.last_response_status = result.status
-                row.last_response_added = json.dumps(result.added)
-                row.last_response_removed = json.dumps(result.removed)
-                row.last_response_reason = result.reason
-                session.commit()
-
-        _logger.info(
-            "role_sync correlation_id=%s discord_id=%s siege_id=%s "
-            "day_number=%s action=%s assigned_at=%s status=%s "
-            "added=%s removed=%s attempt=1",
-            body.correlation_id,
-            body.discord_id,
-            body.siege_id,
-            body.day_number,
-            body.action,
-            body.assigned_at,
-            result.status,
-            result.added,
-            result.removed,
-        )
-
-        return RoleSyncResponse(
-            status=result.status,
-            added=result.added,
-            removed=result.removed,
-            reason=result.reason,
-        )
+            return RoleSyncResponse(
+                status=result.status,
+                added=result.added,
+                removed=result.removed,
+                reason=result.reason,
+            )
 
     # ------------------------------------------------------------------
     # Mount sub-apps on the parent app.

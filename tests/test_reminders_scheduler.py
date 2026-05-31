@@ -39,6 +39,50 @@ from mom_bot.reminders.models import Reminder, ReminderSent  # noqa: F401
 from mom_bot.reminders.scheduler import ReminderScheduler
 
 # ---------------------------------------------------------------------------
+# Deterministic synchronisation helper
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for_send_count(
+    channel: FakeChannel,
+    count: int,
+    *,
+    poll_interval: float = 0.005,
+    timeout: float = 5.0,
+) -> None:
+    """Poll until ``channel.send.call_count >= count`` or ``timeout`` expires.
+
+    Replaces ``await asyncio.sleep(<fixed>)`` in tests that need a precise
+    number of Discord sends.  A fixed sleep is wall-clock-fragile: on a
+    slow CI runner the sleep may expire before the required sends complete,
+    giving a false ``call_count < expected`` failure.  Polling the condition
+    directly means the test advances the moment the sends have occurred,
+    regardless of how long each tick takes on the host.
+
+    Args:
+        channel: The :class:`FakeChannel` whose ``send`` call-count is
+            checked.
+        count: The minimum ``call_count`` to wait for.
+        poll_interval: Seconds between checks (default 5 ms).
+        timeout: Maximum seconds to wait before raising ``AssertionError``
+            (default 5 s — generous enough for any real CI runner, short
+            enough to surface genuine hangs quickly).
+
+    Raises:
+        AssertionError: If ``call_count`` does not reach ``count`` within
+            ``timeout`` seconds.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while channel.send.call_count < count:
+        if asyncio.get_event_loop().time() >= deadline:
+            raise AssertionError(
+                f"Timed out waiting for channel.send.call_count >= {count}; "
+                f"got {channel.send.call_count} after {timeout}s"
+            )
+        await asyncio.sleep(poll_interval)
+
+
+# ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
 
@@ -445,7 +489,9 @@ async def test_discord_forbidden_row_stays_no_retry() -> None:
 
     with time_machine.travel(_TUESDAY_0700, tick=False):
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.18)  # three ticks
+        # Wait until the first (and only) send fires, then cancel — avoids
+        # wall-clock races on slow CI runners.
+        await _wait_for_send_count(channel, 1)
         task.cancel()
         try:
             await task
@@ -475,7 +521,8 @@ async def test_discord_not_found_row_stays_no_retry() -> None:
 
     with time_machine.travel(_TUESDAY_0700, tick=False):
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.18)  # three ticks
+        # Wait until the first (and only) send fires, then cancel.
+        await _wait_for_send_count(channel, 1)
         task.cancel()
         try:
             await task
@@ -506,7 +553,9 @@ async def test_discord_http_5xx_row_deleted_retried() -> None:
 
     with time_machine.travel(_TUESDAY_0700, tick=False):
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.18)  # three ticks
+        # Wait until both sends have fired (first failed, second succeeded)
+        # before cancelling — avoids wall-clock races on slow CI runners.
+        await _wait_for_send_count(channel, 2)
         task.cancel()
         try:
             await task
@@ -537,7 +586,8 @@ async def test_discord_rate_limited_treated_as_5xx() -> None:
 
     with time_machine.travel(_TUESDAY_0700, tick=False):
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.18)
+        # Wait until both sends have fired before cancelling.
+        await _wait_for_send_count(channel, 2)
         task.cancel()
         try:
             await task
@@ -567,7 +617,8 @@ async def test_aiohttp_client_error_row_deleted_retried() -> None:
 
     with time_machine.travel(_TUESDAY_0700, tick=False):
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.18)
+        # Wait until both sends have fired before cancelling.
+        await _wait_for_send_count(channel, 2)
         task.cancel()
         try:
             await task
@@ -597,7 +648,8 @@ async def test_asyncio_timeout_error_row_deleted_retried() -> None:
 
     with time_machine.travel(_TUESDAY_0700, tick=False):
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.18)
+        # Wait until both sends have fired before cancelling.
+        await _wait_for_send_count(channel, 2)
         task.cancel()
         try:
             await task
@@ -644,7 +696,8 @@ async def test_uncaught_exception_row_stays_critical_logged() -> None:
     try:
         with time_machine.travel(_TUESDAY_0700, tick=False):
             task = asyncio.create_task(scheduler.run())
-            await asyncio.sleep(0.18)
+            # Wait until the first (and only) send fires, then cancel.
+            await _wait_for_send_count(channel, 1)
             task.cancel()
             try:
                 await task
